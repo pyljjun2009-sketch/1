@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'self'; style-src 'unsafe-inline'; script-src 'self'"
+  />
+  <title>DeepSeek Harness Desktop</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      display: flex; align-items: center; justify-content: center;
+      background: radial-gradient(1200px 600px at 50% -10%, #101826 0%, #0b0d12 60%);
+      color: #d7dee9; font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    }
+    .wrap { text-align: center; max-width: 560px; padding: 24px; }
+    .logo {
+      width: 64px; height: 64px; margin: 0 auto 20px; border-radius: 16px;
+      background: linear-gradient(135deg, #2f7bf6, #1e3a8a);
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 22px; color: #fff; letter-spacing: 1px;
+      box-shadow: 0 8px 32px rgba(47, 123, 246, 0.35);
+    }
+    .spinner {
+      width: 34px; height: 34px; margin: 0 auto 18px;
+      border: 3px solid rgba(215, 222, 233, 0.15); border-top-color: #2f7bf6;
+      border-radius: 50%; animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    h1 { font-size: 18px; font-weight: 600; margin-bottom: 8px; }
+    #status { font-size: 13px; color: #8b94a7; min-height: 18px; margin-bottom: 6px; word-break: break-all; }
+    #error {
+      display: none; margin-top: 14px; padding: 12px; border-radius: 8px;
+      background: rgba(248, 113, 113, 0.08); border: 1px solid rgba(248, 113, 113, 0.3);
+      color: #fca5a5; font-size: 12px; text-align: left; white-space: pre-wrap; word-break: break-all;
+      max-height: 180px; overflow: auto;
+    }
+    button {
+      margin-top: 12px; padding: 8px 20px; border-radius: 8px; border: 1px solid #2f7bf6;
+      background: #1b2a4a; color: #fff; font-size: 13px; cursor: pointer;
+    }
+    button:hover { background: #24406f; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="logo">DSH</div>
+    <div class="spinner" id="spinner"></div>
+    <h1>正在启动 DeepSeek Harness</h1>
+    <div id="status">初始化桌面端…</div>
+    <div id="error"></div>
+    <button id="retry" class="hidden">重新启动后端</button>
+  </div>
+
+  <script>
+    const statusEl = document.getElementById("status");
+    const errorEl = document.getElementById("error");
+    const spinnerEl = document.getElementById("spinner");
+    const retryBtn = document.getElementById("retry");
+
+    function render(s) {
+      if (!s) return;
+      if (s.state === "running") {
+        statusEl.textContent = "后端已就绪，正在载入界面…";
+      } else if (s.state === "starting" || s.state === "restarting") {
+        statusEl.textContent = "正在启动后端（" + (s.port ? "端口 " + s.port : "分配端口中") + "）…";
+      } else if (s.state === "error") {
+        spinnerEl.classList.add("hidden");
+        statusEl.textContent = "后端启动失败";
+        errorEl.style.display = "block";
+        errorEl.textContent =
+          (s.error || "未知错误") + "\n\n--- 后端日志（末尾） ---\n" + (s.logTail || []).slice(-25).join("\n");
+        retryBtn.classList.remove("hidden");
+      } else if (s.state === "stopped") {
+        statusEl.textContent = "后端已停止";
+      }
+    }
+
+    window.dshDesktop.getStatus().then(render);
+    window.dshDesktop.onStatus(render);
+    window.dshDesktop.onError(render);
+
+    retryBtn.addEventListener("click", async () => {
+      retryBtn.classList.add("hidden");
+      errorEl.style.display = "none";
+      spinnerEl.classList.remove("hidden");
+      statusEl.textContent = "正在重新启动…";
+      const s = await window.dshDesktop.restart();
+      render(s);
+    });
+  </script>
+</body>
+</html>

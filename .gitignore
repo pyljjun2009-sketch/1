@@ -1,0 +1,13 @@
+node_modules/
+dist/
+dist-audit/
+dist-test/
+*.log
+.DS_Store
+*.exe
+*.dll
+*.pak
+*.bin
+*.dat
+*.asar
+*.tmp

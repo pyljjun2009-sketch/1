@@ -1,0 +1,47 @@
+# electron-builder 配置
+# 说明：预留的应用自升级（electron-updater）需要发布源。
+# 接入方式见 UPGRADE.md —— 在此添加 publish 配置并重新打包，即可生成
+# app-update.yml，桌面端升级接口自动生效（无需改代码）。
+appId: com.deepseek-ai.dsh-desktop
+productName: DeepSeek Harness Desktop
+copyright: Copyright © 2025 DSH Desktop Contributors
+
+directories:
+  buildResources: assets
+  output: dist
+
+files:
+  - src/**
+  - assets/loading.html
+  - assets/icon.png
+  - package.json
+
+asar: true
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  icon: assets/icon.png
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: DeepSeek Harness
+
+portable:
+  artifactName: ${productName}-${version}-portable.${ext}
+
+# 示例：启用应用自升级时取消注释并替换为真实发布源
+# publish:
+#   provider: generic
+#   url: https://updates.example.com/dsh-desktop/
+#   channel: latest
