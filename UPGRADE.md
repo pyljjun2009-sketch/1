@@ -1,13 +1,14 @@
 # 升级接口设计（预留）
 
-桌面端把"升级"拆成两条独立轨道，均为**预留接口**：每个结果都带显式 `status` 枚举，诚实报告当前能力（未配置/已最新/可更新/stub），不抛错、不假升级；接入真实升级服务时**无需改动 IPC 协议**，只需完成下述接入点。
+桌面端把"升级"拆成三条独立轨道，每个结果都带显式 `status` 枚举，诚实报告当前能力，不抛错、不假升级；接入真实升级服务时**无需改动 IPC 协议**。
 
-## 两条轨道与状态枚举
+## 三条轨道与状态枚举
 
 | track | 含义 | 当前状态 | 接入点 |
 | --- | --- | --- | --- |
 | `app` | 桌面应用自升级 | 已内置 `electron-updater`；未配置发布源时 `status:"not-configured"` | `electron-builder.yml` 的 `publish` 配置 |
 | `backend` | DSH 后端（npm 包 `@deepseek-ai/dsh`）升级 | `check()` 已实现；`apply()` 为 `status:"stub"` | `src/main/updater.js` 的 `BACKEND_UPGRADER` |
+| `profile` | Profile bundle 依赖更新 | `check()` 已实现（对比 npm registry）；`apply()` 已实现（`dsh plugin update`） | `src/main/updater.js` 的 `_checkProfile`/`_applyProfile` |
 
 `status` 枚举（结果对象统一携带）：
 

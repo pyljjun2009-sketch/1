@@ -69,12 +69,14 @@ class UpgradeManager extends EventEmitter {
   async check(track) {
     if (track === "backend") return this._checkBackend();
     if (track === "app") return this._checkApp();
+    if (track === "profile") return this._checkProfile();
     return { track, status: "error", supported: false, reason: `未知升级轨道: ${track}` };
   }
 
   async apply(track, targetVersion) {
     if (track === "backend") return this._applyBackend(targetVersion);
     if (track === "app") return this._applyApp();
+    if (track === "profile") return this._applyProfile(targetVersion);
     return { track, status: "error", applied: false, reason: `未知升级轨道: ${track}` };
   }
 
@@ -213,6 +215,102 @@ class UpgradeManager extends EventEmitter {
       return { track: "app", status: "up-to-date", applied: false, message: "已是最新版本" };
     } catch (err) {
       return { track: "app", status: "error", applied: false, reason: err.message };
+    }
+  }
+
+  // ---- Profile 轨道（bundle 依赖更新检测） -------------------------------
+
+  /** 读取 profile 的 package.json 中声明的 bundles。 */
+  _readProfileBundles() {
+    const { join } = require("node:path");
+    const { homedir } = require("node:os");
+    const dshHome = process.env.DSH_HOME || join(homedir(), ".dsh");
+    const pkgPath = join(dshHome, "profiles", "web", "package.json");
+    try {
+      const pkg = JSON.parse(require("node:fs").readFileSync(pkgPath, "utf8"));
+      const bundles = pkg["dsh.profile.bundles"] || [];
+      const deps = pkg.dependencies || {};
+      return { bundles, deps, dshHome };
+    } catch {
+      return { bundles: [], deps: {}, dshHome };
+    }
+  }
+
+  /** 检查 profile bundle 是否有可用更新。 */
+  async _checkProfile() {
+    const { bundles, deps, dshHome } = this._readProfileBundles();
+    if (bundles.length === 0) {
+      return {
+        track: "profile",
+        status: "up-to-date",
+        supported: true,
+        bundles: [],
+        message: "未发现 bundle 依赖",
+      };
+    }
+
+    const updatable = [];
+    for (const pkg of bundles) {
+      const installed = deps[pkg];
+      if (!installed) continue;
+      try {
+        const res = await fetch(
+          `https://registry.npmjs.org/${pkg}/latest`,
+          { signal: AbortSignal.timeout(8000) }
+        );
+        if (!res.ok) continue;
+        const meta = await res.json();
+        const latest = meta.version;
+        if (latest && latest !== installed) {
+          updatable.push({ name: pkg, current: installed, latest });
+        }
+      } catch {
+        // 无法访问 registry 的包跳过
+      }
+    }
+
+    return {
+      track: "profile",
+      status: updatable.length > 0 ? "update-available" : "up-to-date",
+      supported: true,
+      bundles: updatable,
+      updatableCount: updatable.length,
+      totalCount: bundles.length,
+      message: updatable.length > 0
+        ? `${updatable.length}/${bundles.length} 个 bundle 可更新`
+        : `全部 ${bundles.length} 个 bundle 已是最新`,
+    };
+  }
+
+  /** 执行 profile bundle 更新（通过 dsh plugin update）。 */
+  async _applyProfile(targetVersion) {
+    const { bundles } = this._readProfileBundles();
+    if (bundles.length === 0) {
+      return {
+        track: "profile",
+        status: "up-to-date",
+        applied: false,
+        message: "未发现 bundle 依赖",
+      };
+    }
+    const { spawnSync } = require("node:child_process");
+    const pkg = targetVersion || bundles.join(" ");
+    try {
+      const r = spawnSync(
+        "dsh",
+        ["plugin", "--profile", "web", "update", ...pkg.split(" ")],
+        { encoding: "utf8", timeout: 120_000, windowsHide: true }
+      );
+      const success = r.status === 0;
+      this._emit("profile-update", { success, output: r.stdout + r.stderr });
+      return {
+        track: "profile",
+        status: success ? "up-to-date" : "error",
+        applied: success,
+        message: success ? "Profile bundle 已更新（需重启 dsh 后端）" : `更新失败: ${(r.stderr || r.stdout).slice(-200)}`,
+      };
+    } catch (err) {
+      return { track: "profile", status: "error", applied: false, reason: err.message };
     }
   }
 }

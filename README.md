@@ -10,9 +10,11 @@
 - 🛡️ 安全渲染默认：Windows 默认 `inprocess` GPU 模式（软件渲染并入浏览器进程），彻底规避 GPU 进程崩溃导致的启动即退；可用 `--hardware-acceleration` 恢复
 - 🪟 原生窗口：菜单（含"升级状态"）、快捷键（Ctrl+R 刷新、F12 开发者工具）、单实例锁、开机自启
 - 🔁 后端自愈：异常退出自动重启（指数退避 1s/3s/10s，最多 3 次）；停止时**确认式**进程树清理（taskkill 状态检查 + 主 PID 消失轮询 + 后代枚举，残留即报 error）
-- 🔌 升级接口（预留）：应用自升级（electron-updater）+ 后端升级两条轨道，状态机诚实报告，见 `UPGRADE.md`
+- 🔌 升级接口：应用自升级 + 后端升级 + Profile bundle 更新三条轨道，状态机诚实报告，见 `UPGRADE.md`
+- 💾 数据备份/恢复：一键备份 DSH profile（bundle 清单/patch 配置），支持恢复/对比/删除，自动保留最近 10 份
+- 🔧 崩溃恢复：启动时检测异常退出，连续崩溃 3 次后弹诊断对话框，支持一键恢复或 Profile 重置
 - 🔒 安全：contextIsolation + 沙箱 preload；外部链接交给系统浏览器；配置 schema 校验；渲染进程禁止通过 IPC 修改 `dshCommand`/`nodeBin`（防任意命令注入）
-- ⚙️ 可配置：`settings.json` 支持 dsh 命令/端口/工作目录/GPU 策略/常开模式
+- ⚙️ 可配置 + 设置面板：Ctrl+, 打开，集成备份管理/崩溃恢复/通用配置/升级状态/关于
 
 ## 环境要求
 

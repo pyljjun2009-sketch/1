@@ -237,11 +237,29 @@
 
     async function loadAbout() {
       const v = await dsh.getVersions();
+      // 检查三条升级轨道状态
+      let upgradeHtml = "";
+      for (const track of ["app", "backend", "profile"]) {
+        try {
+          const r = await dsh.upgrade.check(track);
+          const labels = { app: "桌面应用", backend: "DSH 后端", profile: "Profile bundles" };
+          const badge = r.status === "up-to-date" ? "ok"
+            : r.status === "update-available" ? "info"
+            : r.status === "stub" ? "warn" : "err";
+          upgradeHtml += `<p>${labels[track]}: <span class="badge ${badge}">${r.status}</span> ${r.message ? r.message.slice(0, 60) : ""}</p>`;
+        } catch {
+          upgradeHtml += `<p>${track}: <span class="badge err">检查失败</span></p>`;
+        }
+      }
       document.getElementById("about-info").innerHTML = `
         <p><strong>DeepSeek Harness Desktop</strong></p>
         <p>应用版本: ${v.app} · Electron ${v.electron ?? "?"} · Node ${v.node}</p>
         <p>DSH 后端: ${v.dsh ?? "未连接"}</p>
-        <p style="margin-top:10px;color:#8b949e;font-size:12px;">DSH 本体（@deepseek-ai/dsh）未做任何改动，由本应用作为外部进程托管。</p>
+        <div style="margin-top:12px;border-top:1px solid #30363d;padding-top:10px;">
+          <p style="font-weight:600;margin-bottom:6px;">升级状态</p>
+          ${upgradeHtml}
+        </div>
+        <p style="margin-top:10px;color:#8b949e;font-size:12px;">DSH 本体未做改动，由本应用托管。</p>
       `;
     }
 
