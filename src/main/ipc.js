@@ -22,7 +22,7 @@ function safeSend(win, channel, payload) {
   }
 }
 
-function registerIpc({ server, getWindow, upgradeManager, ipc = ipcMain, appApi = app, shellApi = shell }) {
+function registerIpc({ server, getWindow, upgradeManager, backupManager, crashRecovery, ipc = ipcMain, appApi = app, shellApi = shell }) {
   ipc.handle(CH.STATUS, () => server.status());
 
   ipc.handle(CH.RESTART, async () => {
@@ -85,10 +85,47 @@ function registerIpc({ server, getWindow, upgradeManager, ipc = ipcMain, appApi 
     return true;
   });
 
+  ipc.handle(CH.OPEN_SETTINGS, () => {
+    // 打开设置面板（独立窗口或弹窗）
+    const { BrowserWindow } = require("electron");
+    const { join } = require("node:path");
+    const existing = BrowserWindow.getAllWindows().find((w) => w.getTitle() === "设置");
+    if (existing) { existing.focus(); return true; }
+    const settingsWin = new BrowserWindow({
+      width: 700, height: 600, title: "设置",
+      parent: getWindow(), modal: true, show: false,
+      webPreferences: { preload: join(__dirname, "..", "preload", "preload.js"), contextIsolation: true, nodeIntegration: false, sandbox: true },
+    });
+    settingsWin.setMenuBarVisibility(false);
+    settingsWin.loadFile(join(__dirname, "..", "..", "assets", "settings.html"));
+    settingsWin.once("ready-to-show", () => settingsWin.show());
+    return true;
+  });
+
   ipc.handle(CH.UPGRADE_CHECK, (event, track) => upgradeManager.check(track));
   ipc.handle(CH.UPGRADE_APPLY, (event, track, targetVersion) =>
     upgradeManager.apply(track, targetVersion)
   );
+
+  // 备份/恢复
+  ipc.handle(CH.BACKUP_CREATE, (event, note) => backupManager.create(note));
+  ipc.handle(CH.BACKUP_LIST, () => backupManager.list());
+  ipc.handle(CH.BACKUP_RESTORE, (event, id) => backupManager.restore(id));
+  ipc.handle(CH.BACKUP_DIFF, (event, id) => backupManager.diff(id));
+  ipc.handle(CH.BACKUP_DELETE, (event, id) => backupManager.delete(id));
+
+  // 崩溃恢复
+  ipc.handle(CH.CRASH_GET_STATUS, () => crashRecovery.getStatus());
+  ipc.handle(CH.CRASH_DIAGNOSE, () => crashRecovery.diagnose());
+  ipc.handle(CH.CRASH_MARK_CLEAN, () => { crashRecovery.markCleanExit(); return true; });
+  ipc.handle(CH.CRASH_RESET, () => {
+    const backup = backupManager.create("重置前自动备份");
+    const { rmSync, mkdirSync } = require("node:fs");
+    const profileDir = require("node:path").join(crashRecovery.dshHome, "profiles", "web");
+    rmSync(profileDir, { recursive: true, force: true });
+    mkdirSync(profileDir, { recursive: true });
+    return { reset: true, backupId: backup.id };
+  });
 
   // 主进程 -> 渲染进程事件推送（窗口销毁竞态安全）
   const sink = (payload) => safeSend(getWindow(), CH.UPGRADE_EVENT, payload);
@@ -97,7 +134,7 @@ function registerIpc({ server, getWindow, upgradeManager, ipc = ipcMain, appApi 
   server.on("status", (s) => safeSend(getWindow(), CH.STATUS_EVENT, s));
   server.on("error", (s) => safeSend(getWindow(), CH.ERROR_EVENT, s));
 
-  return { server, getWindow, upgradeManager };
+  return { server, getWindow, upgradeManager, backupManager, crashRecovery };
 }
 
 module.exports = { registerIpc, IPC_RESTRICTED_FIELDS, safeSend };

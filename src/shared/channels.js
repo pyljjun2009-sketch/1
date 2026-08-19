@@ -12,9 +12,23 @@ module.exports = {
   OPEN_EXTERNAL: "app:open-external",
   VERSIONS: "app:get-versions",
   OPEN_DEVTOOLS: "window:open-devtools",
+  OPEN_SETTINGS: "window:open-settings",
   RELOAD_WINDOW: "window:reload",
   UPGRADE_CHECK: "upgrade:check",
   UPGRADE_APPLY: "upgrade:apply",
+
+  /** 备份/恢复 */
+  BACKUP_CREATE: "backup:create",
+  BACKUP_LIST: "backup:list",
+  BACKUP_RESTORE: "backup:restore",
+  BACKUP_DIFF: "backup:diff",
+  BACKUP_DELETE: "backup:delete",
+
+  /** 崩溃恢复 */
+  CRASH_GET_STATUS: "crash:get-status",
+  CRASH_DIAGNOSE: "crash:diagnose",
+  CRASH_MARK_CLEAN: "crash:mark-clean",
+  CRASH_RESET: "crash:reset-profile",
 
   /** 主进程 -> 渲染进程（send） */
   STATUS_EVENT: "dsh:status-event",

@@ -15,13 +15,15 @@ function isServerOrigin(url, serverUrl) {
   }
 }
 
-function buildMenu({ restartServer, openUserDataDir, checkUpgrades }) {
+function buildMenu({ restartServer, openUserDataDir, checkUpgrades, openSettings }) {
   const isMac = process.platform === "darwin";
   const template = [
     ...(isMac ? [{ role: "appMenu" }] : []),
     {
       label: "文件",
       submenu: [
+        { label: "设置", accelerator: "Ctrl+,", click: openSettings },
+        { type: "separator" },
         { label: "重新启动 DSH 后端", accelerator: "Ctrl+Shift+R", click: restartServer },
         { type: "separator" },
         isMac ? { role: "close" } : { role: "quit", label: "退出" },

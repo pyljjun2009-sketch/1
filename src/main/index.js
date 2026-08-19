@@ -22,12 +22,15 @@
  */
 const fs = require("node:fs");
 const path = require("node:path");
+const { join } = path;
 const { app, BrowserWindow } = require("electron");
 const { settings } = require("./config.js");
 const { DshServer } = require("./dsh-server.js");
 const { createMainWindow, buildMenu } = require("./window.js");
 const { UpgradeManager } = require("./updater.js");
 const { registerIpc } = require("./ipc.js");
+const { BackupManager } = require("./backup.js");
+const { CrashRecovery } = require("./crash-recovery.js");
 
 const SMOKE_READY_TIMEOUT_MS = 30_000;
 const SMOKE_PAGE_TIMEOUT_MS = 60_000;
@@ -101,6 +104,8 @@ if (!gotLock) {
 } else {
   let mainWindow = null;
   let server = null;
+  let backupManager = null;
+  let crashRecovery = null;
   let smokeTimer = null;
   let quitting = false;
 
@@ -130,13 +135,43 @@ if (!gotLock) {
     dbg("whenReady: settings initialized");
     server = new DshServer();
     const upgradeManager = new UpgradeManager({ server });
-    dbg("whenReady: server/upgrade created");
+    backupManager = new BackupManager({
+      backupDir: join(app.getPath("userData"), "backups"),
+      dshHome: process.env.DSH_HOME || join(require("os").homedir(), ".dsh"),
+    });
+    crashRecovery = new CrashRecovery({
+      userDataDir: app.getPath("userData"),
+      backupManager,
+    });
+    dbg("whenReady: server/upgrade/backup/crash created");
+
+    // 崩溃恢复检测：启动时检查上次退出状态
+    const crashDiag = crashRecovery.diagnose();
+    if (crashDiag.issues.length > 0) {
+      dbg(`whenReady: crash recovery detected ${crashDiag.issues.length} issue(s)`);
+    }
+    // 应用正常接管后清除退出标记（下次异常退出时能检测到）
+    crashRecovery.clearCleanExit();
 
     buildMenu({
       restartServer: () => server.restart(),
       openUserDataDir: () => {
         const { shell } = require("electron");
         shell.openPath(app.getPath("userData"));
+      },
+      openSettings: async () => {
+        const { BrowserWindow } = require("electron");
+        const { join } = require("node:path");
+        const existing = BrowserWindow.getAllWindows().find((w) => w.getTitle() === "设置");
+        if (existing) { existing.focus(); return; }
+        const settingsWin = new BrowserWindow({
+          width: 700, height: 600, title: "设置",
+          parent: mainWindow, modal: true, show: false,
+          webPreferences: { preload: join(__dirname, "..", "preload", "preload.js"), contextIsolation: true, nodeIntegration: false, sandbox: true },
+        });
+        settingsWin.setMenuBarVisibility(false);
+        settingsWin.loadFile(join(__dirname, "..", "..", "assets", "settings.html"));
+        settingsWin.once("ready-to-show", () => settingsWin.show());
       },
       checkUpgrades: async () => {
         // 帮助菜单"升级状态"：诚实展示两条轨道的当前能力
@@ -158,7 +193,7 @@ if (!gotLock) {
       },
     });
 
-    registerIpc({ server, getWindow: () => mainWindow, upgradeManager });
+    registerIpc({ server, getWindow: () => mainWindow, upgradeManager, backupManager, crashRecovery });
     dbg("whenReady: ipc registered");
 
     mainWindow = createMainWindow(server);
@@ -250,8 +285,16 @@ if (!gotLock) {
     try {
       await server.start();
       dbg(`server.start done: state=${server.state} url=${server.url}`);
+      if (server.state === "running" && crashRecovery) {
+        crashRecovery.resetCrashCount();
+        crashRecovery.markLastKnownGood();
+      } else if (server.state === "error" && crashRecovery) {
+        const count = crashRecovery.incrementCrashCount();
+        dbg(`crash count: ${count}`);
+      }
     } catch (err) {
       console.error("[dsh-desktop] 后端启动失败:", err);
+      if (crashRecovery) crashRecovery.incrementCrashCount();
     }
   });
 
@@ -269,9 +312,10 @@ if (!gotLock) {
     if (process.platform !== "darwin") app.quit();
   });
 
-  // 退出前确认式停止后端（preventDefault + 完成后放行），避免子进程树残留
+  // 退出前：标记正常退出 + 确认式停止后端，避免子进程树残留
   app.on("before-quit", (event) => {
     if (quitting) return;
+    if (crashRecovery) crashRecovery.markCleanExit();
     if (server && server.state !== "stopped") {
       event.preventDefault();
       dbg("before-quit: 正在确认式停止后端…");

@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; script-src 'self'" />
+  <title>设置</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; background: #0d1117; color: #c9d1d9; font-size: 13px; }
+    .tabs { display: flex; border-bottom: 1px solid #30363d; padding: 0 16px; background: #161b22; }
+    .tab { padding: 10px 16px; cursor: pointer; border-bottom: 2px solid transparent; color: #8b949e; }
+    .tab.active { color: #58a6ff; border-bottom-color: #58a6ff; }
+    .panel { display: none; padding: 20px 24px; }
+    .panel.active { display: block; }
+    h2 { font-size: 15px; margin-bottom: 14px; color: #f0f6fc; }
+    label { display: block; margin-bottom: 10px; color: #8b949e; }
+    label span { display: block; margin-bottom: 3px; }
+    input, select { background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; padding: 6px 10px; border-radius: 6px; width: 100%; }
+    .row { display: flex; gap: 10px; align-items: center; margin-bottom: 12px; }
+    .btn { padding: 7px 16px; border-radius: 6px; border: 1px solid #30363d; background: #21262d; color: #c9d1d9; cursor: pointer; font-size: 13px; }
+    .btn:hover { background: #30363d; }
+    .btn.primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+    .btn.primary:hover { background: #388bfd; }
+    .btn.danger { border-color: #f85149; color: #f85149; }
+    .btn.danger:hover { background: #f85149; color: #fff; }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; }
+    .badge.ok { background: #238636; color: #fff; }
+    .badge.warn { background: #9e6a03; color: #fff; }
+    .badge.err { background: #da3633; color: #fff; }
+    .badge.info { background: #1f6feb; color: #fff; }
+    .backup-list { max-height: 280px; overflow-y: auto; border: 1px solid #30363d; border-radius: 6px; }
+    .backup-item { padding: 10px 14px; border-bottom: 1px solid #21262d; display: flex; justify-content: space-between; align-items: center; }
+    .backup-item:last-child { border-bottom: none; }
+    .backup-meta { font-size: 12px; color: #8b949e; }
+    .backup-actions { display: flex; gap: 6px; }
+    .status-card { padding: 12px 16px; border: 1px solid #30363d; border-radius: 8px; margin-bottom: 10px; background: #161b22; }
+    .empty { padding: 24px; text-align: center; color: #8b949e; }
+    .toast { position: fixed; bottom: 20px; right: 20px; padding: 10px 18px; border-radius: 8px; background: #1f6feb; color: #fff; font-size: 13px; display: none; z-index: 999; }
+    .toast.show { display: block; animation: fadeIn .3s; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    .section-desc { font-size: 12px; color: #8b949e; margin-bottom: 14px; }
+  </style>
+</head>
+<body>
+  <div class="tabs">
+    <div class="tab active" data-tab="backup">备份管理</div>
+    <div class="tab" data-tab="crash">崩溃恢复</div>
+    <div class="tab" data-tab="config">通用设置</div>
+    <div class="tab" data-tab="about">关于</div>
+  </div>
+
+  <div class="panel active" id="panel-backup">
+    <h2>数据备份</h2>
+    <p class="section-desc">备份 DSH profile（bundle 清单、patch 配置）。插件安装/升级前建议手动备份。</p>
+    <div class="row">
+      <button class="btn primary" id="btn-create-backup">立即备份</button>
+      <input type="text" id="backup-note" placeholder="备注（可选）" style="width: 260px;" />
+    </div>
+    <div class="backup-list" id="backup-list">
+      <div class="empty">加载中…</div>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-crash">
+    <h2>崩溃恢复</h2>
+    <p class="section-desc">检测上次退出状态，提供恢复/重置功能。</p>
+    <div id="crash-status">
+      <div class="empty">加载中…</div>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-config">
+    <h2>通用设置</h2>
+    <div id="config-form">
+      <label>
+        <span>GPU 渲染策略</span>
+        <select id="cfg-gpuMode">
+          <option value="null">自动（平台默认）</option>
+          <option value="inprocess">inprocess（软件渲染，最稳定）</option>
+          <option value="off">off（软件渲染）</option>
+          <option value="auto">auto（硬件加速）</option>
+        </select>
+      </label>
+      <label>
+        <span>后端端口（0=自动）</span>
+        <input type="number" id="cfg-port" min="0" max="65535" />
+      </label>
+      <label>
+        <span>后端监听地址</span>
+        <input type="text" id="cfg-host" />
+      </label>
+      <label>
+        <label><input type="checkbox" id="cfg-keepRunning" /> 关窗后保持后端运行</label>
+      </label>
+      <label>
+        <label><input type="checkbox" id="cfg-reuseDsh" /> 尝试复用已有 dsh 后端实例</label>
+      </label>
+      <div class="row" style="margin-top: 16px;">
+        <button class="btn primary" id="btn-save-config">保存设置</button>
+        <span id="config-status" style="font-size: 12px; color: #8b949e;"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-about">
+    <h2>关于</h2>
+    <div class="status-card" id="about-info">加载中…</div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const dsh = window.dshDesktop;
+
+    // Tab switching
+    document.querySelectorAll(".tab").forEach((tab) => {
+      tab.addEventListener("click", () => {
+        document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
+        document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
+        tab.classList.add("active");
+        document.getElementById("panel-" + tab.dataset.tab).classList.add("active");
+      });
+    });
+
+    function toast(msg, duration) {
+      const t = document.getElementById("toast");
+      t.textContent = msg;
+      t.classList.add("show");
+      setTimeout(() => t.classList.remove("show"), duration || 3000);
+    }
+
+    async function loadBackups() {
+      const list = await dsh.backup.list();
+      const el = document.getElementById("backup-list");
+      if (!list.length) { el.innerHTML = '<div class="empty">暂无备份</div>'; return; }
+      el.innerHTML = list.map((b) => `
+        <div class="backup-item">
+          <div>
+            <strong>${b.id}</strong> ${b.note ? '<span class="badge info">' + b.note + '</span>' : ''}
+            <div class="backup-meta">DSH ${b.dshVersion || "?"} · ${b.files?.length || 0} 个文件</div>
+          </div>
+          <div class="backup-actions">
+            <button class="btn" onclick="doDiff('${b.id}')">对比</button>
+            <button class="btn primary" onclick="doRestore('${b.id}')">恢复</button>
+            <button class="btn danger" onclick="doDelete('${b.id}')">删除</button>
+          </div>
+        </div>`).join("");
+    }
+
+    document.getElementById("btn-create-backup").addEventListener("click", async () => {
+      const note = document.getElementById("backup-note").value.trim();
+      await dsh.backup.create(note || null);
+      toast("备份已创建");
+      document.getElementById("backup-note").value = "";
+      loadBackups();
+    });
+
+    async function doRestore(id) {
+      if (!confirm("确定恢复备份 " + id + "？当前配置会被覆盖（自动备份会先创建）。")) return;
+      const r = await dsh.backup.restore(id);
+      toast("已恢复（恢复前备份: " + r.beforeBackupId + "）");
+      loadBackups();
+    }
+
+    async function doDiff(id) {
+      const d = await dsh.backup.diff(id);
+      if (d.identical) { toast("当前状态与备份完全一致"); return; }
+      const lines = Object.entries(d.diffs).map(([f, info]) =>
+        `${f}: 备份 ${info.backupHash} (${info.backupSize}B) ≠ 当前 ${info.currentHash} (${info.currentSize}B)`
+      );
+      alert("差异（" + Object.keys(d.diffs).length + " 个文件）：\n\n" + lines.join("\n"));
+    }
+
+    async function doDelete(id) {
+      if (!confirm("确定删除备份 " + id + "？")) return;
+      await dsh.backup.delete(id);
+      toast("已删除");
+      loadBackups();
+    }
+
+    async function loadCrash() {
+      const diag = await dsh.crash.diagnose();
+      const el = document.getElementById("crash-status");
+      let html = `<div class="status-card">
+        <span>上次退出：</span>${diag.uncleanExit ? '<span class="badge warn">异常</span>' : '<span class="badge ok">正常</span>'}
+        &nbsp;&nbsp;<span>连续崩溃：</span>${diag.crashCount >= 3 ? '<span class="badge err">' + diag.crashCount + ' 次</span>' : '<span class="badge ok">' + diag.crashCount + ' 次</span>'}
+        ${diag.lastKnownGood ? '<br><span style="color:#8b949e;">上次成功启动: ' + diag.lastKnownGood + '</span>' : ''}
+      </div>`;
+      if (diag.issues.length) {
+        html += '<div style="margin-top:12px;">';
+        for (const issue of diag.issues) {
+          html += `<div class="status-card"><span class="badge ${issue.level === 'error' ? 'err' : 'warn'}">${issue.level}</span> ${issue.message}<br><span style="color:#8b949e;">${issue.action}</span></div>`;
+        }
+        html += '</div>';
+      }
+      html += '<div class="row" style="margin-top:14px;">';
+      html += '<button class="btn" onclick="dsh.crash.markClean().then(()=>{toast(\'已标记为正常退出\');loadCrash();})">标记退出正常</button>';
+      html += '<button class="btn danger" onclick="doResetProfile()">重置 Profile</button>';
+      html += '</div>';
+      el.innerHTML = html;
+    }
+
+    async function doResetProfile() {
+      if (!confirm("将重置 DSH Profile（备份当前状态后删除，下次启动重装依赖）。确定？")) return;
+      const r = await dsh.crash.resetProfile();
+      toast("Profile 已重置（备份: " + r.backupId + "）");
+      loadCrash();
+    }
+
+    async function loadConfig() {
+      const cfg = await dsh.getConfig();
+      document.getElementById("cfg-gpuMode").value = cfg.gpuMode ?? "null";
+      document.getElementById("cfg-port").value = cfg.port ?? 0;
+      document.getElementById("cfg-host").value = cfg.host ?? "127.0.0.1";
+      document.getElementById("cfg-keepRunning").checked = !!cfg.keepBackendRunning;
+      document.getElementById("cfg-reuseDsh").checked = !!cfg.reuseExistingDsh;
+    }
+
+    document.getElementById("btn-save-config").addEventListener("click", async () => {
+      const patch = {
+        gpuMode: document.getElementById("cfg-gpuMode").value === "null" ? null : document.getElementById("cfg-gpuMode").value,
+        port: parseInt(document.getElementById("cfg-port").value) || 0,
+        host: document.getElementById("cfg-host").value || "127.0.0.1",
+        keepBackendRunning: document.getElementById("cfg-keepRunning").checked,
+        reuseExistingDsh: document.getElementById("cfg-reuseDsh").checked,
+      };
+      try {
+        await dsh.setConfig(patch);
+        document.getElementById("config-status").textContent = "已保存";
+        toast("设置已保存");
+      } catch (e) {
+        document.getElementById("config-status").textContent = "保存失败: " + e.message;
+      }
+    });
+
+    async function loadAbout() {
+      const v = await dsh.getVersions();
+      document.getElementById("about-info").innerHTML = `
+        <p><strong>DeepSeek Harness Desktop</strong></p>
+        <p>应用版本: ${v.app} · Electron ${v.electron ?? "?"} · Node ${v.node}</p>
+        <p>DSH 后端: ${v.dsh ?? "未连接"}</p>
+        <p style="margin-top:10px;color:#8b949e;font-size:12px;">DSH 本体（@deepseek-ai/dsh）未做任何改动，由本应用作为外部进程托管。</p>
+      `;
+    }
+
+    // Init
+    loadBackups();
+    loadCrash();
+    loadConfig();
+    loadAbout();
+  </script>
+</body>
+</html>

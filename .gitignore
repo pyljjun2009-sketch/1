@@ -2,6 +2,7 @@ node_modules/
 dist/
 dist-audit/
 dist-test/
+dist-review/
 *.log
 .DS_Store
 *.exe
@@ -11,3 +12,7 @@ dist-test/
 *.dat
 *.asar
 *.tmp
+.dsh-vision/
+dsh-server.js
+dsh-server.js.map
+index.js.map

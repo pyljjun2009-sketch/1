@@ -248,8 +248,9 @@ class DshServer extends EventEmitter {
         return { argv: [nodeBin, bin, "web"], source: `npm global (${root})` };
       }
     }
-    // 兜底：依赖 PATH 中的 dsh（Windows 下为 dsh.cmd，需要 shell）
-    return { argv: ["dsh", "web"], source: "PATH", needsShell: process.platform === "win32" };
+    // 不再通过 shell (cmd.exe/dsh.cmd) 兜底 —— 避免产生 cmd.exe 包装进程，
+    // 且 PATH 下的 dsh.cmd 版本与 npm global 版本可能不一致。
+    return null; // null = 无法解析启动命令，由 _preflight 生成明确错误
   }
 
   /**
@@ -274,6 +275,28 @@ class DshServer extends EventEmitter {
       this._pushLog(`[dsh-desktop] 工作目录创建失败（${dir}）: ${err.message}`);
     }
     return dir;
+  }
+
+  /** 检测指定地址是否已有 HTTP 服务运行（如外部脚本启动的 dsh web）。 */
+  async _probeUrl(url, timeoutMs = 3000) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+      return res.status < 500;
+    } catch {
+      return false;
+    }
+  }
+
+  /** 启动前检测端口占用：若已有 dsh web 实例运行在常用端口，输出警告。 */
+  async _warnPortOccupied(host) {
+    for (const probePort of [3080, 8080]) {
+      const probeUrl = `http://${host}:${probePort}/`;
+      if (await this._probeUrl(probeUrl)) {
+        this._pushLog(
+          `[dsh-desktop] ⚠ 检测到端口 ${probePort} 已有服务运行（可能是外部启动的 dsh web）：${probeUrl}。如需复用，在 settings.json 设置 port:${probePort}；如需独立，在 settings.json 设置 port:0`
+        );
+      }
+    }
   }
 
   /**
@@ -307,6 +330,21 @@ class DshServer extends EventEmitter {
     }
     if (this._binPath && !existsSync(this._binPath)) {
       return `未找到 DSH 启动脚本: ${this._binPath}（请确认 npm i -g @deepseek-ai/dsh 已安装）`;
+    }
+    // Profile 预检：~/.dsh/profiles/web 可写性（最常见启动阻断原因：EPERM）
+    const { homedir } = require("node:os");
+    const dshHome = process.env.DSH_HOME || join(homedir(), ".dsh");
+    const profileDir = join(dshHome, "profiles", "web");
+    if (existsSync(profileDir)) {
+      try {
+        const testFile = join(profileDir, ".dsh-desktop-preflight-test");
+        require("node:fs").writeFileSync(testFile, "ok");
+        require("node:fs").unlinkSync(testFile);
+      } catch (err) {
+        if (err.code === "EPERM") {
+          return `DSH profile 目录无法写入: ${profileDir}（EPERM 权限错误）——请检查目录权限或以管理员身份运行`;
+        }
+      }
     }
     return null;
   }
@@ -342,11 +380,23 @@ class DshServer extends EventEmitter {
     this._stopRequested = false;
     this.error = null;
     this.lastExit = null;
+
+    // 检测外部 dsh 占用（warn 日志，不阻断）
+    await this._warnPortOccupied(host);
+
     this.port = await findFreePort(preferred, host);
     this.url = `http://${host}:${this.port}/`;
     this.cwd = this._resolveWorkingDir();
 
-    const { argv, source, needsShell } = this._resolveLaunch();
+    const launch = this._resolveLaunch();
+    if (!launch) {
+      const msg = "未找到 @deepseek-ai/dsh（npm global）：请运行 npm i -g @deepseek-ai/dsh，或在 settings.json 的 nodeBin/dshCommand 中指定路径";
+      this._setState("error", { error: msg });
+      this._pushLog(`[dsh-desktop] 启动失败: ${msg}`);
+      this._emitError(this.status());
+      return this.status();
+    }
+    const { argv, source } = launch;
     this._launchSource = source;
     this.launchCommand = [...argv, "--host", host, "--port", String(this.port)];
     this._setState("starting", { pid: null, error: null });
@@ -354,7 +404,7 @@ class DshServer extends EventEmitter {
       `[dsh-desktop] 启动命令: ${this.launchCommand.join(" ")} (来源: ${source}, cwd: ${this.cwd})`
     );
 
-    // 预检：node/bin/工作目录（诊断信息进入 error 与日志）
+    // 预检：node/bin/工作目录
     const preflightError = this._preflight();
     if (preflightError) {
       this._setState("error", { error: preflightError });
@@ -369,7 +419,7 @@ class DshServer extends EventEmitter {
         env: process.env,
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
-        shell: needsShell === true,
+        shell: false, // 始终不用 shell：避免 cmd.exe/powershell.exe 包装进程
       });
     } catch (err) {
       this._setState("error", {
