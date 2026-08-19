@@ -47,6 +47,7 @@
   <div class="tabs">
     <div class="tab active" data-tab="backup">备份管理</div>
     <div class="tab" data-tab="crash">崩溃恢复</div>
+    <div class="tab" data-tab="upgrade">升级管理</div>
     <div class="tab" data-tab="config">通用设置</div>
     <div class="tab" data-tab="about">关于</div>
   </div>
@@ -68,6 +69,18 @@
     <p class="section-desc">检测上次退出状态，提供恢复/重置功能。</p>
     <div id="crash-status">
       <div class="empty">加载中…</div>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-upgrade">
+    <h2>升级管理</h2>
+    <p class="section-desc">检测并管理桌面应用、DSH 后端和 Profile bundle 的更新。</p>
+    <div id="upgrade-status">
+      <div class="empty">加载中…</div>
+    </div>
+    <div class="row" style="margin-top: 14px;">
+      <button class="btn primary" id="btn-check-upgrade">检查所有更新</button>
+      <span id="upgrade-status-msg" style="font-size: 12px; color: #8b949e;"></span>
     </div>
   </div>
 
@@ -263,9 +276,55 @@
       `;
     }
 
+    async function loadUpgrade() {
+      const el = document.getElementById("upgrade-status");
+      const tracks = [
+        { track: "app", label: "桌面应用", desc: "应用自身更新（需配置 electron-builder publish）" },
+        { track: "backend", label: "DSH 后端", desc: "@deepseek-ai/dsh npm 包更新" },
+        { track: "profile", label: "Profile bundles", desc: "已安装 bundle 依赖的版本更新" },
+      ];
+      let html = "";
+      for (const t of tracks) {
+        try {
+          const r = await dsh.upgrade.check(t.track);
+          const badge = r.status === "up-to-date" ? "ok"
+            : r.status === "update-available" ? "info"
+            : r.status === "stub" ? "warn" : "err";
+          const detail = r.status === "update-available" && r.bundles?.length
+            ? r.bundles.map((b) => `${b.name}: ${b.current} → ${b.latest}`).join(", ")
+            : r.message || "";
+          html += `<div class="status-card">
+            <strong>${t.label}</strong> <span class="badge ${badge}">${r.status}</span>
+            <div style="font-size:12px;color:#8b949e;margin-top:4px;">${t.desc}</div>
+            ${detail ? `<div style="font-size:12px;margin-top:4px;">${detail}</div>` : ""}
+            ${r.status === "update-available" && t.track === "profile"
+              ? `<button class="btn primary" style="margin-top:8px;" onclick="applyProfileUpgrade()">更新 Profile bundles</button>`
+              : ""}
+          </div>`;
+        } catch {
+          html += `<div class="status-card"><strong>${t.label}</strong> <span class="badge err">检查失败</span></div>`;
+        }
+      }
+      el.innerHTML = html;
+      document.getElementById("upgrade-status-msg").textContent = "";
+    }
+
+    async function applyProfileUpgrade() {
+      document.getElementById("upgrade-status-msg").textContent = "正在更新…";
+      const r = await dsh.upgrade.apply("profile");
+      toast(r.message || "操作完成");
+      loadUpgrade();
+    }
+
+    document.getElementById("btn-check-upgrade").addEventListener("click", async () => {
+      document.getElementById("upgrade-status-msg").textContent = "检查中…";
+      await loadUpgrade();
+    });
+
     // Init
     loadBackups();
     loadCrash();
+    loadUpgrade();
     loadConfig();
     loadAbout();
   </script>
