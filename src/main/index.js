@@ -167,7 +167,7 @@ if (!gotLock) {
         const settingsWin = new BrowserWindow({
           width: 700, height: 600, title: "设置",
           parent: mainWindow, modal: true, show: false,
-          webPreferences: { preload: join(__dirname, "..", "preload", "preload.js"), contextIsolation: true, nodeIntegration: false, sandbox: true },
+          webPreferences: { preload: join(__dirname, "..", "preload", "preload-settings.js"), contextIsolation: true, nodeIntegration: false, sandbox: true },
         });
         settingsWin.setMenuBarVisibility(false);
         settingsWin.loadFile(join(__dirname, "..", "..", "assets", "settings.html"));

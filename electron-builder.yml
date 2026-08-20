@@ -13,6 +13,7 @@ directories:
 files:
   - src/**
   - assets/loading.html
+  - assets/settings.html
   - assets/icon.png
   - package.json
 
