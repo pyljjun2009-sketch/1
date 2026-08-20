@@ -154,6 +154,50 @@ async function waitPidGone(pid, timeoutMs = 5000, intervalMs = 250) {
   return !pidExists(pid);
 }
 
+/**
+ * 分析 dsh 后端日志，识别已知错误模式并返回针对性诊断信息。
+ * 基于用户经验总结中的故障排查文档。
+ */
+function analyzeDshError(logTail) {
+  const arr = Array.isArray(logTail) ? logTail : [];
+  const text = arr.map(String).join("\n");
+  const patterns = [
+    {
+      test: /already owned by process (\d+)/,
+      msg: (m) => `插件锁冲突：任务看板 (task-board) 的 ledger 已被进程 ${m[1]} 占用。另一个 dsh web 实例正在运行同一 profile。请关闭该实例后重试，或在 settings.json 中设置 reuseExistingDsh: true 复用已有实例。`,
+    },
+    {
+      test: /cannot resolve profile bundle/,
+      msg: () => "Profile bundle 解析失败：已配置的 bundle 未安装。请运行 dsh plugin --profile web install 重新安装依赖。",
+    },
+    {
+      test: /Cannot find package/,
+      msg: (m) => `插件依赖缺失：${m[0].split("Cannot find package")[1]?.trim() || "未知包"}。请检查 cordis.patch.yml 中的引用是否正确。`,
+    },
+    {
+      test: /without inject/,
+      msg: () => "插件缺少依赖注入声明（inject）。请检查插件是否兼容当前 DSH 版本。",
+    },
+    {
+      test: /must declare output/,
+      msg: () => "插件使用了旧版工具注册协议。请升级插件到兼容当前 DSH 版本的版本。",
+    },
+    {
+      test: /pending \(waiting for service\)/,
+      msg: () => "插件等待了不存在的服务。可能是插件顺序依赖问题或配置错误。",
+    },
+    {
+      test: /EPERM.*operation not permitted/,
+      msg: (m) => `目录权限异常（EPERM）。请检查 ~/.dsh/profiles/web/ 的写入权限。`,
+    },
+  ];
+  for (const { test, msg } of patterns) {
+    const m = text.match(test);
+    if (m) return msg(m);
+  }
+  return null;
+}
+
 class DshServer extends EventEmitter {
   constructor() {
     super();
@@ -474,8 +518,10 @@ class DshServer extends EventEmitter {
           this._scheduleRestart(delaySec * 1000);
           return;
         }
+        const logSummary = this.logTail.slice(-30).join("\n");
+        const diagnosis = analyzeDshError(logSummary);
         this._setState("error", {
-          error: `dsh 后端意外退出（code=${code} signal=${signal}），已尝试 ${MAX_CRASH_RESTARTS} 次重启`,
+          error: diagnosis || `dsh 后端意外退出（code=${code} signal=${signal}），已尝试 ${MAX_CRASH_RESTARTS} 次重启`,
         });
         this._emitError(this.status());
       }
