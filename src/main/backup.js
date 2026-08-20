@@ -128,7 +128,7 @@ class BackupManager extends EventEmitter {
   list() {
     if (!existsSync(this.backupDir)) return [];
     const entries = readdirSync(this.backupDir)
-      .filter((e) => statSync(join(this.backupDir, e)).isDirectory())
+      .filter((e) => { try { return statSync(join(this.backupDir, e)).isDirectory(); } catch { return false; } })
       .sort()
       .reverse();
     return entries.map((id) => {

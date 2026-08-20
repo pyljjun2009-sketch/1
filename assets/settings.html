@@ -144,6 +144,11 @@
       setTimeout(() => t.classList.remove("show"), duration || 3000);
     }
 
+    /** HTML 实体转义（防 XSS）。 */
+    function esc(s) {
+      return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+    }
+
     async function loadBackups() {
       const list = await dsh.backup.list();
       const el = document.getElementById("backup-list");
@@ -151,7 +156,7 @@
       el.innerHTML = list.map((b) => `
         <div class="backup-item">
           <div>
-            <strong>${b.id}</strong> ${b.note ? '<span class="badge info">' + b.note + '</span>' : ''}
+            <strong>${esc(b.id)}</strong> ${b.note ? '<span class="badge info">' + esc(b.note) + '</span>' : ''}
             <div class="backup-meta">DSH ${b.dshVersion || "?"} · ${b.files?.length || 0} 个文件</div>
           </div>
           <div class="backup-actions">
@@ -291,7 +296,7 @@
             : r.status === "update-available" ? "info"
             : r.status === "stub" ? "warn" : "err";
           const detail = r.status === "update-available" && r.bundles?.length
-            ? r.bundles.map((b) => `${b.name}: ${b.current} → ${b.latest}`).join(", ")
+            ? r.bundles.map((b) => `${esc(b.name)}: ${b.current} → ${b.latest}`).join(", ")
             : r.message || "";
           html += `<div class="status-card">
             <strong>${t.label}</strong> <span class="badge ${badge}">${r.status}</span>
