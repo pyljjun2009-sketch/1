@@ -344,6 +344,40 @@ class DshServer extends EventEmitter {
   }
 
   /**
+   * 复用模式：检测并连接已有的 DSH Web 实例。
+   * 验证目标是 DSH（检查页面标题含 "DeepSeek" 或页面内容含 "__DSH_BOOT__"）
+   * 后直接挂接，不重新启动后端。
+   */
+  async _tryReuse(host) {
+    const candidates = [Number(settings.get("port")) || 3080, 3080];
+    for (const probePort of [...new Set(candidates)]) {
+      const probeUrl = `http://${host}:${probePort}/`;
+      try {
+        const res = await fetch(probeUrl, { signal: AbortSignal.timeout(5000) });
+        if (res.status < 400) {
+          const html = await res.text();
+          // 验证是 DSH Web UI（标题或启动标记）
+          const isDsh = /DeepSeek/i.test(html) || /__DSH_BOOT__/i.test(html);
+          if (isDsh) {
+            this.port = probePort;
+            this.url = probeUrl;
+            this._launchSource = `reuse (${probeUrl})`;
+            this.launchCommand = [];
+            this.version = null;
+            this.cwd = this._resolveWorkingDir();
+            this._setState("running");
+            this._pushLog(`[dsh-desktop] 复用已有 DSH 实例: ${probeUrl}`);
+            return this.status();
+          }
+        }
+      } catch {
+        // 连接失败，跳过
+      }
+    }
+    return null;
+  }
+
+  /**
    * 启动前预检：验证可执行文件、node 与 dsh bin 可用性，失败时给出明确诊断。
    * @returns {string|null} 错误信息；null 表示通过
    */
@@ -425,8 +459,24 @@ class DshServer extends EventEmitter {
     this.error = null;
     this.lastExit = null;
 
+    // 安全拦截：非 localhost 地址需要明确授权
+    const LOCALHOST_RE = /^(127\.\d+\.\d+\.\d+|::1|localhost)$/i;
+    if (!LOCALHOST_RE.test(host) && !settings.get("allowNetworkAccess")) {
+      const msg = `安全限制：监听地址 "${host}" 不是 localhost。若需局域网访问，请在 settings.json 中设置 allowNetworkAccess: true（注意：这会暴露 DSH Web 到局域网）。`;
+      this._pushLog(`[dsh-desktop] ${msg}`);
+      this._setState("error", { error: msg });
+      this._emitError(this.status());
+      return this.status();
+    }
+
     // 检测外部 dsh 占用（warn 日志，不阻断）
     await this._warnPortOccupied(host);
+
+    // 复用模式：如果已启用且有可用的 DSH 实例，直接连接而非重新启动
+    if (settings.get("reuseExistingDsh")) {
+      const reused = await this._tryReuse(host);
+      if (reused) return reused;
+    }
 
     this.port = await findFreePort(preferred, host);
     this.url = `http://${host}:${this.port}/`;
