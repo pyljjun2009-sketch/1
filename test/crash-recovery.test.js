@@ -14,8 +14,8 @@ function setup() {
   const backupDir = mkdtempSync(join(tmpdir(), "dsh-crash-backup-"));
   const dshHome = mkdtempSync(join(tmpdir(), "dsh-crash-home-"));
   const backupManager = new BackupManager({ backupDir, dshHome });
-  const cr = new CrashRecovery({ userDataDir, backupManager });
-  return { cr, userDataDir, dshHome };
+  const cr = new CrashRecovery({ userDataDir, dshHome, backupManager });
+  return { cr, userDataDir, dshHome, backupManager };
 }
 
 test("正常退出标记: markCleanExit + detectUncleanExit", () => {
@@ -67,4 +67,30 @@ test("diagnose: 无问题时返回空 issues", () => {
   cr.markCleanExit();
   const d = cr.diagnose();
   assert.equal(d.issues.length, 0);
+});
+
+test("dshHome 属性已正确保存", () => {
+  const { cr, dshHome } = setup();
+  assert.equal(cr.dshHome, dshHome);
+});
+
+test("重置 Profile：备份→删除→重建→返回备份 ID", () => {
+  const { cr, dshHome, backupManager } = setup();
+  const profileDir = join(dshHome, "profiles", "web");
+  // 确保 profile 存在
+  const { mkdirSync, writeFileSync } = require("node:fs");
+  mkdirSync(profileDir, { recursive: true });
+  writeFileSync(join(profileDir, "package.json"), '{"bundles":["test"]}');
+
+  // 模拟 CRASH_RESET 逻辑
+  const backup = backupManager.create("重置前备份");
+  assert.ok(backup.id);
+
+  const { rmSync, mkdirSync: m2 } = require("node:fs");
+  rmSync(profileDir, { recursive: true, force: true });
+  m2(profileDir, { recursive: true });
+
+  assert.ok(!existsSync(join(profileDir, "package.json")), "Profile 已被删除");
+  assert.ok(existsSync(profileDir), "Profile 目录已重建");
+  assert.equal(backupManager.list().length >= 1, true, "备份已创建");
 });

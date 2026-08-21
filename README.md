@@ -39,13 +39,13 @@ npm run start:safe   # 安全模式（等同 --safe-mode，强制 inprocess GPU�
 ## 测试与质量
 
 ```bash
-npm test                  # 全部单元测试（44 个用例）
+npm test                  # 全部单元测试（60 个用例）
 npm run test:unit         # 配置/升级/IPC 快速单测
 npm run test:process      # Windows 进程树与停止确认（dsh-server）
-npm run test:syntax       # 全部 JS 语法检查
+npm run test:syntax       # 全部 JS 语法检查（23 个文件）
 npm run test:smoke        # 冒烟（真实 dsh，依赖本机全局安装）
 npm run test:smoke:fixture# 冒烟（内置假 DSH fixture，CI 可用，不依赖本机 dsh）
-npm run test:package      # 独立目录打包验证（dist-test/）
+npm run test:package      # 解包构建 + ASAR 内容验证（15 个关键文件）
 npm run clean             # 清理 dist/、dist-test/、dist-review/
 ```
 
@@ -93,6 +93,8 @@ npm run pack              # 仅解包目录（快速验证）
 | `launchAtLogin` | boolean | `false` | 开机自启 |
 | `openDevTools` | boolean | `false` | 启动后自动打开开发者工具 |
 | `autoRestartOnCrash` | boolean | `true` | 后端异常退出自动重启（指数退避，最多 3 次） |
+| `reuseExistingDsh` | boolean | `false` | 复用已有 DSH 实例（验证 DeepSeek 标记后直接挂接，不重新启动） |
+| `allowNetworkAccess` | boolean | `false` | 允许监听非 localhost 地址（⚠ 会暴露 DSH Web 到局域网，需显式开启） |
 
 ### GPU 渲染策略解析顺序
 
@@ -121,15 +123,20 @@ DSHaness/
 │  │  ├─ dsh-server.js # 后端生命周期（预检、端口、就绪、退避重启、确认式树级清理）
 │  │  ├─ window.js     # 主窗口与菜单
 │  │  ├─ ipc.js        # IPC 接线（依赖可注入；受限字段防护）
-│  │  └─ updater.js    # 升级接口（预留，显式状态枚举）
-│  ├─ preload/preload.js   # 沙箱桥接，暴露 window.dshDesktop
+│  │  ├─ updater.js    # 升级接口（三轨道：app/backend/profile）
+│  │  ├─ backup.js     # 数据备份管理器
+│  │  └─ crash-recovery.js # 崩溃恢复管理器
+│  ├─ preload/
+│  │  ├─ preload.js        # 最小权限桥接（DSH 页面/加载页用）
+│  │  └─ preload-settings.js  # 完整管理权限桥接（设置页专用）
 │  └─ shared/channels.js   # IPC 通道名
-├─ test/               # node:test 单元测试（config/dsh-server/updater/ipc + fixtures）
-├─ scripts/            # check-syntax / clean / build / init-smoke-settings
+├─ test/               # node:test 单元测试（60 个用例）
+├─ scripts/            # check-syntax / clean / build / init-smoke-settings / verify-build
 ├─ docs/adr/           # 架构决策记录（ADR-001/002）
-├─ assets/             # 图标、加载页
+├─ assets/             # 图标、加载页、设置页
 ├─ electron-builder.yml
-└─ UPGRADE.md          # 升级接口设计文档
+├─ UPGRADE.md          # 升级接口设计文档
+└─ PLAN-2.0.md         # 2.0 计划书
 ```
 
 ## 开发调试

@@ -18,7 +18,7 @@
     "test:syntax": "node scripts/check-syntax.js",
     "test:smoke": "set DSH_DESKTOP_SMOKE=1&& set DSH_DESKTOP_DEBUG=1&& set DSH_DESKTOP_USER_DATA=%TEMP%\\dsh-desktop-smoke&& electron .",
     "test:smoke:fixture": "set DSH_DESKTOP_SMOKE=1&& set DSH_DESKTOP_DEBUG=1&& set DSH_DESKTOP_USER_DATA=%TEMP%\\dsh-desktop-smoke-fixture&& node scripts/init-smoke-settings.js&& electron .",
-    "test:package": "set DSH_DESKTOP_BUILD_DIR=dist-test&& node scripts/build.js --dir",
+    "test:package": "set DSH_DESKTOP_BUILD_DIR=dist-test&& node scripts/build.js --dir&& node scripts/verify-build.js dist-test/win-unpacked",
     "clean": "node scripts/clean.js",
     "pack": "node scripts/build.js --dir",
     "dist": "node scripts/build.js --win",

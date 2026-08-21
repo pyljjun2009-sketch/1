@@ -82,6 +82,6 @@ const BACKEND_UPGRADER = {
 ## 兼容性约定
 
 - `settings.json` 向前兼容：未知字段忽略；非法值拒绝写入或回退默认值并告警（见 `src/main/config.js`）。
-- IPC 通道只增不删；新增能力时在 `src/shared/channels.js` 与 `src/preload/preload.js` 同步注册。
+- IPC 通道只增不删；新增能力时在 `src/shared/channels.js`、`src/preload/preload.js`（最小权限）与 `src/preload/preload-settings.js`（完整权限）三处同步注册。
 - 升级失败永不假成功：必须返回明确的 `status` 与 `reason`，由 UI 呈现。
 - 升级状态机有单测覆盖（`test/updater.test.js`，注入假 autoUpdater / mock fetch），改动后运行 `npm test`。

@@ -16,9 +16,10 @@ const { existsSync, readFileSync, writeFileSync, unlinkSync } = require("node:fs
 const { EventEmitter } = require("node:events");
 
 class CrashRecovery extends EventEmitter {
-  constructor({ userDataDir, backupManager }) {
+  constructor({ userDataDir, dshHome, backupManager }) {
     super();
     this.dir = userDataDir;
+    this.dshHome = dshHome; // DSH 主目录（~/.dsh）
     this.cleanExitFile = join(userDataDir, ".last-clean-exit");
     this.crashCountFile = join(userDataDir, ".crash-count");
     this.lastGoodFile = join(userDataDir, ".last-known-good");

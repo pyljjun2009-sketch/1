@@ -141,6 +141,7 @@ if (!gotLock) {
     });
     crashRecovery = new CrashRecovery({
       userDataDir: app.getPath("userData"),
+      dshHome: process.env.DSH_HOME || join(require("os").homedir(), ".dsh"),
       backupManager,
     });
     dbg("whenReady: server/upgrade/backup/crash created");
