@@ -29,6 +29,7 @@ module.exports = {
   CRASH_DIAGNOSE: "crash:diagnose",
   CRASH_MARK_CLEAN: "crash:mark-clean",
   CRASH_RESET: "crash:reset-profile",
+  CRASH_RESYNC: "crash:resync-profile",
 
   /** 主进程 -> 渲染进程（send） */
   STATUS_EVENT: "dsh:status-event",

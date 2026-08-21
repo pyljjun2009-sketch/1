@@ -127,6 +127,24 @@ function registerIpc({ server, getWindow, upgradeManager, backupManager, crashRe
     return { reset: true, backupId: backup.id };
   });
 
+  ipc.handle(CH.CRASH_RESYNC, () => {
+    // 修复插件依赖不一致：执行 dsh plugin install 统一 package.json/lock/node_modules 状态
+    const { spawnSync } = require("node:child_process");
+    try {
+      const r = spawnSync("dsh", ["plugin", "--profile", "web", "install"], {
+        encoding: "utf8", timeout: 180_000, windowsHide: true, shell: process.platform === "win32",
+      });
+      const success = r.status === 0;
+      return {
+        resync: success,
+        output: (r.stdout || "") + (r.stderr || ""),
+        message: success ? "插件依赖已同步" : "同步失败，请查看输出",
+      };
+    } catch (err) {
+      return { resync: false, output: "", message: `执行失败: ${err.message}` };
+    }
+  });
+
   // 主进程 -> 渲染进程事件推送（窗口销毁竞态安全）
   const sink = (payload) => safeSend(getWindow(), CH.UPGRADE_EVENT, payload);
   upgradeManager.setEventSink(sink);

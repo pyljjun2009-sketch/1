@@ -288,3 +288,28 @@ test("pidExists / waitPidGone: 存活与消失检测", async () => {
     if (alive.exitCode === null) alive.kill();
   }
 });
+
+test("_checkProfileBundles: 检测 bundle 声明与 node_modules 不一致", () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = require("node:fs");
+  const { tmpdir } = require("node:os");
+  const { join } = require("node:path");
+  const dshHome = mkdtempSync(join(tmpdir(), "dsh-bundle-check-"));
+  const profileDir = join(dshHome, "profiles", "web");
+  mkdirSync(profileDir, { recursive: true });
+
+  // 声明了 3 个 bundle，但 node_modules 里只有 1 个
+  writeFileSync(join(profileDir, "package.json"), JSON.stringify({
+    "dsh.profile.bundles": [
+      "@deepseek-ai/dsh-base",           // 官方基础（跳过检查）
+      "@linxin666/dsh-ssh",              // 缺失
+      "@linxin666/dsh-web-ui",           // 存在
+    ],
+  }));
+  mkdirSync(join(profileDir, "node_modules", "@linxin666", "dsh-web-ui"), { recursive: true });
+
+  const server = new DshServer();
+  const missing = server._checkProfileBundles(dshHome);
+  assert.deepEqual(missing, ["@linxin666/dsh-ssh"]);
+
+  rmSync(dshHome, { recursive: true, force: true });
+});

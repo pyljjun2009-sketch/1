@@ -37,7 +37,7 @@ test("preload-settings.js 的通道常量与 channels.js 完全同步", () => {
   // settings 预加载应包含所有管理 API 的通道
   const managementKeys = [
     "BACKUP_CREATE", "BACKUP_LIST", "BACKUP_RESTORE", "BACKUP_DIFF", "BACKUP_DELETE",
-    "CRASH_GET_STATUS", "CRASH_DIAGNOSE", "CRASH_MARK_CLEAN", "CRASH_RESET",
+    "CRASH_GET_STATUS", "CRASH_DIAGNOSE", "CRASH_MARK_CLEAN", "CRASH_RESET", "CRASH_RESYNC",
     "UPGRADE_CHECK", "UPGRADE_APPLY",
     "GET_CONFIG", "SET_CONFIG",
     "OPEN_DEVTOOLS",
@@ -51,7 +51,7 @@ test("preload.js（最小权限）不应包含管理 API 通道", () => {
   const preloadKeys = extractPreloadKeys("preload.js");
   const restrictedKeys = [
     "BACKUP_CREATE", "BACKUP_RESTORE", "BACKUP_DELETE",
-    "CRASH_GET_STATUS", "CRASH_DIAGNOSE", "CRASH_MARK_CLEAN", "CRASH_RESET",
+    "CRASH_GET_STATUS", "CRASH_DIAGNOSE", "CRASH_MARK_CLEAN", "CRASH_RESET", "CRASH_RESYNC",
     "GET_CONFIG", "SET_CONFIG",
     "UPGRADE_CHECK", "UPGRADE_APPLY",
   ];

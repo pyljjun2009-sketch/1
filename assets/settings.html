@@ -215,9 +215,19 @@
       }
       html += '<div class="row" style="margin-top:14px;">';
       html += '<button class="btn" onclick="dsh.crash.markClean().then(()=>{toast(\'已标记为正常退出\');loadCrash();})">标记退出正常</button>';
+      html += '<button class="btn" onclick="doResyncProfile()">修复插件依赖</button>';
       html += '<button class="btn danger" onclick="doResetProfile()">重置 Profile</button>';
       html += '</div>';
       el.innerHTML = html;
+    }
+
+    async function doResyncProfile() {
+      if (!confirm("将执行 dsh plugin --profile web install 同步插件依赖（修复 package.json/lock/node_modules 不一致）。确定？")) return;
+      toast("正在同步插件依赖…");
+      const r = await dsh.crash.resyncProfile();
+      toast(r.message);
+      if (!r.resync) alert("同步失败：\n\n" + (r.output || r.message).slice(-2000));
+      loadCrash();
     }
 
     async function doResetProfile() {

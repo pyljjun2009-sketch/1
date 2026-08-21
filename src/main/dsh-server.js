@@ -167,8 +167,11 @@ function analyzeDshError(logTail) {
       msg: (m) => `插件锁冲突：任务看板 (task-board) 的 ledger 已被进程 ${m[1]} 占用。另一个 dsh web 实例正在运行同一 profile。请关闭该实例后重试，或在 settings.json 中设置 reuseExistingDsh: true 复用已有实例。`,
     },
     {
-      test: /cannot resolve profile bundle/,
-      msg: () => "Profile bundle 解析失败：已配置的 bundle 未安装。请运行 dsh plugin --profile web install 重新安装依赖。",
+      test: /cannot resolve profile bundle(?:\s+"?([^"\s]+)"?)?/,
+      msg: (m) => {
+        const bundle = m[1] || "未知";
+        return `Profile bundle 解析失败：${bundle} 已声明但未安装（package.json / pnpm-lock.yaml / node_modules 状态不一致）。请运行 "dsh plugin --profile web install" 同步依赖后重启。`;
+      },
     },
     {
       test: /Cannot find package/,
@@ -423,8 +426,38 @@ class DshServer extends EventEmitter {
           return `DSH profile 目录无法写入: ${profileDir}（EPERM 权限错误）——请检查目录权限或以管理员身份运行`;
         }
       }
+      // bundle 存在性验证：package.json 声明的每个 bundle 必须在 node_modules 实际存在
+      // （防止 package.json / pnpm-lock.yaml / node_modules 三者状态不一致导致启动失败）
+      const missingBundles = this._checkProfileBundles(dshHome);
+      if (missingBundles.length > 0) {
+        return (
+          `DSH profile bundle 安装不完整：${missingBundles.join(", ")} 已声明但 node_modules 中不存在。` +
+          `请运行 "dsh plugin --profile web install" 同步依赖后重启`
+        );
+      }
     }
     return null;
+  }
+
+  /** 检查 package.json 声明的 bundles 是否在 node_modules 中实际存在。 */
+  _checkProfileBundles(dshHome) {
+    const { readFileSync } = require("node:fs");
+    const pkgPath = join(dshHome, "profiles", "web", "package.json");
+    try {
+      const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+      const bundles = pkg["dsh.profile.bundles"] || [];
+      const missing = [];
+      for (const b of bundles) {
+        // 官方基础 bundle 从 dsh 安装目录解析，其余从 profile node_modules 解析
+        const isOfficial = b.startsWith("@deepseek-ai/dsh-");
+        if (isOfficial) continue;
+        const dir = join(dshHome, "profiles", "web", "node_modules", ...b.split("/"));
+        if (!existsSync(dir)) missing.push(b);
+      }
+      return missing;
+    } catch {
+      return [];
+    }
   }
 
   /** 从 bin.js 同级的 package.json 读取 DSH 版本（不额外启动进程）。 */
