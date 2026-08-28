@@ -1,0 +1,13 @@
+feat: 全局 DSH 运行库损坏防护 + 错误诊断增强 + Profile 五项一致性检查
+
+基于多次故障排查经验：
+
+1. DSH 全局安装完整性预检：验证 yaml schema 模块存在，缺失时提示同版本重装（不删除 ~/.dsh）
+2. 错误诊断增加 Cannot find module yaml/节点模块 条件：区分 profile 模块缺失 vs 全局 DSH 运行库损坏
+3. _checkProfileHealth 五项一致性检查：bundle/node_modules/lock/package.json/patch 一致
+4. 设置页"Profile 健康检查"按钮：展示五项检查结果 + 存在性状态
+5. 修复卸载不完整判定为 warning → 正确升级为 error（阻断启动）
+6. 写入 DSH-启动卡住经验总结.md 文档
+7. 新增 _checkProfileHealth / _checkProfileBundles 单元测试
+
+总计: 65/65 测试通过

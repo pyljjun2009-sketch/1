@@ -145,6 +145,24 @@ function registerIpc({ server, getWindow, upgradeManager, backupManager, crashRe
     }
   });
 
+  ipc.handle(CH.CRASH_CHECK_PROFILE, () => {
+    const { readFileSync } = require("node:fs");
+    const dshHome = crashRecovery.dshHome;
+    const profileDir = require("node:path").join(dshHome, "profiles", "web");
+    // 导入 DshServer 以使用 _checkProfileHealth
+    const { DshServer } = require("./dsh-server.js");
+    const srv = new DshServer();
+    const result = srv._checkProfileHealth(dshHome);
+    return {
+      ...result,
+      profileDir,
+      hasPackageJson: require("node:fs").existsSync(require("node:path").join(profileDir, "package.json")),
+      hasLock: require("node:fs").existsSync(require("node:path").join(profileDir, "pnpm-lock.yaml")),
+      hasPatch: require("node:fs").existsSync(require("node:path").join(profileDir, "cordis.patch.yml")),
+      hasNodeModules: require("node:fs").existsSync(require("node:path").join(profileDir, "node_modules")),
+    };
+  });
+
   // 主进程 -> 渲染进程事件推送（窗口销毁竞态安全）
   const sink = (payload) => safeSend(getWindow(), CH.UPGRADE_EVENT, payload);
   upgradeManager.setEventSink(sink);

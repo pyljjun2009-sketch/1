@@ -313,3 +313,46 @@ test("_checkProfileBundles: 检测 bundle 声明与 node_modules 不一致", () 
 
   rmSync(dshHome, { recursive: true, force: true });
 });
+
+test("_checkProfileHealth: 五项一致性检查（bundle 存在 → healthy）", () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = require("node:fs");
+  const { tmpdir } = require("node:os");
+  const { join } = require("node:path");
+  const dshHome = mkdtempSync(join(tmpdir(), "dsh-health-ok-"));
+  const profileDir = join(dshHome, "profiles", "web");
+  mkdirSync(profileDir, { recursive: true });
+  writeFileSync(join(profileDir, "package.json"), JSON.stringify({
+    "dsh.profile.bundles": ["@deepseek-ai/dsh-base"],
+    dependencies: { "@deepseek-ai/dsh-base": "0.1.0" },
+  }));
+  mkdirSync(join(profileDir, "node_modules"), { recursive: true });
+
+  const server = new DshServer();
+  const result = server._checkProfileHealth(dshHome);
+  assert.equal(result.healthy, true);
+  assert.ok(result.hasPackageJson);
+  assert.equal(result.issues.length, 0);
+
+  rmSync(dshHome, { recursive: true, force: true });
+});
+
+test("_checkProfileHealth: bundle 存在但 node_modules 缺失 → unhealthy", () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = require("node:fs");
+  const { tmpdir } = require("node:os");
+  const { join } = require("node:path");
+  const dshHome = mkdtempSync(join(tmpdir(), "dsh-health-bad-"));
+  const profileDir = join(dshHome, "profiles", "web");
+  mkdirSync(profileDir, { recursive: true });
+  writeFileSync(join(profileDir, "package.json"), JSON.stringify({
+    "dsh.profile.bundles": ["@linxin666/dsh-ssh"],
+    dependencies: { "@linxin666/dsh-ssh": "0.2.4" },
+  }));
+
+  const server = new DshServer();
+  const result = server._checkProfileHealth(dshHome);
+  assert.equal(result.healthy, false);
+  assert.ok(result.issues.length > 0);
+  assert.ok(result.issues[0].msg.includes("@linxin666/dsh-ssh"));
+
+  rmSync(dshHome, { recursive: true, force: true });
+});

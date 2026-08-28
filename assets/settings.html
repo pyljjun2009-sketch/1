@@ -70,6 +70,7 @@
     <div id="crash-status">
       <div class="empty">加载中…</div>
     </div>
+    <div id="profile-health" style="margin-top: 14px;"></div>
   </div>
 
   <div class="panel" id="panel-upgrade">
@@ -215,6 +216,7 @@
       }
       html += '<div class="row" style="margin-top:14px;">';
       html += '<button class="btn" onclick="dsh.crash.markClean().then(()=>{toast(\'已标记为正常退出\');loadCrash();})">标记退出正常</button>';
+      html += '<button class="btn primary" onclick="doCheckProfile()">Profile 健康检查</button>';
       html += '<button class="btn" onclick="doResyncProfile()">修复插件依赖</button>';
       html += '<button class="btn danger" onclick="doResetProfile()">重置 Profile</button>';
       html += '</div>';
@@ -228,6 +230,32 @@
       toast(r.message);
       if (!r.resync) alert("同步失败：\n\n" + (r.output || r.message).slice(-2000));
       loadCrash();
+    }
+
+    async function doCheckProfile() {
+      toast("正在检查 Profile 一致性…");
+      const result = await dsh.crash.checkProfile();
+      const el = document.getElementById("profile-health");
+      if (!el) return;
+      const statusIcon = result.healthy ? '<span class="badge ok">健康</span>' : '<span class="badge err">异常</span>';
+      let html = `<div class="status-card"><strong>Profile 一致性检查</strong> ${statusIcon}<br>`;
+      html += `<span style="font-size:12px;color:#8b949e;">${esc(result.profileDir)}</span><br>`;
+      html += `<span style="font-size:12px;">package.json: ${result.hasPackageJson ? "✅" : "❌"} | `;
+      html += `pnpm-lock.yaml: ${result.hasLock ? "✅" : "❌"} | `;
+      html += `cordis.patch.yml: ${result.hasPatch ? "✅" : "❌"} | `;
+      html += `node_modules: ${result.hasNodeModules ? "✅" : "❌"}</span>`;
+      if (result.issues.length) {
+        html += '<div style="margin-top:8px;">';
+        for (const issue of result.issues) {
+          const badge = issue.level === "error" ? "err" : issue.level === "warning" ? "warn" : "info";
+          html += `<div class="status-card"><span class="badge ${badge}">${esc(issue.level)}</span> ${esc(issue.msg)}</div>`;
+        }
+        html += '</div>';
+      } else {
+        html += '<p style="color:#8b949e;margin-top:8px;font-size:12px;">五项一致性检查全部通过</p>';
+      }
+      html += '</div>';
+      el.innerHTML = html;
     }
 
     async function doResetProfile() {

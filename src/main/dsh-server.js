@@ -178,6 +178,20 @@ function analyzeDshError(logTail) {
       msg: (m) => `插件依赖缺失：${m[0].split("Cannot find package")[1]?.trim() || "未知包"}。请检查 cordis.patch.yml 中的引用是否正确。`,
     },
     {
+      test: /Cannot find module.*yaml/,
+      msg: () => "DSH 全局运行库损坏：yaml 模块文件缺失。请运行 'npm install -g @deepseek-ai/dsh' 重装全局 DSH（同版本），不要删除 ~/.dsh 目录。",
+    },
+    {
+      test: /Cannot find module/,
+      msg: (m) => {
+        const mod = m[0].split("Cannot find module")[1]?.trim().replace(/['"]/g, "") || "未知模块";
+        if (mod.includes("node_modules") && !mod.startsWith(".")) {
+          return `DSH 运行库模块缺失：${mod}。请运行 "npm install -g @deepseek-ai/dsh" 重装全局 DSH。`;
+        }
+        return `模块缺失：${mod}。如果是 profile 相关模块，请运行 "dsh plugin --profile web install"；如果是 DSH 核心模块，请重装全局 DSH。`;
+      },
+    },
+    {
       test: /without inject/,
       msg: () => "插件缺少依赖注入声明（inject）。请检查插件是否兼容当前 DSH 版本。",
     },
@@ -377,6 +391,20 @@ class DshServer extends EventEmitter {
         // 连接失败，跳过
       }
     }
+    // DSH 全局安装完整性验证：检查关键运行库文件（防止 yaml 等模块损坏）
+    if (this._binPath) {
+      const dshRoot = join(this._binPath, "..", "..");
+      const yamlMerge = join(dshRoot, "node_modules", "yaml", "dist", "schema", "yaml-1.1", "merge.js");
+      if (!existsSync(yamlMerge)) {
+        let installedVersion = "unknown";
+        try { installedVersion = JSON.parse(readFileSync(join(dshRoot, "package.json"), "utf8")).version; } catch { /* 忽略 */ }
+        return (
+          `DSH 全局运行库文件损坏：yaml schema 模块缺失（${yamlMerge}）。` +
+          `当前版本: ${installedVersion}。请运行 "npm install -g @deepseek-ai/dsh@${installedVersion}" 同版本重装。` +
+          `⚠ 不要删除 ~/.dsh 目录（含插件配置和凭据），仅重装全局 DSH 即可。`
+        );
+      }
+    }
     return null;
   }
 
@@ -458,6 +486,83 @@ class DshServer extends EventEmitter {
     } catch {
       return [];
     }
+  }
+
+  /**
+   * 五项一致性检查（section X）：验证 profile 的 package.json、
+   * pnpm-lock.yaml、cordis.patch.yml 和 node_modules 四者状态一致。
+   * 返回 { healthy, issues[] }
+   */
+  _checkProfileHealth(dshHome) {
+    const fs = require("node:fs");
+    const issues = [];
+    const profileDir = join(dshHome, "profiles", "web");
+    const pkgPath = join(profileDir, "package.json");
+    const lockPath = join(profileDir, "pnpm-lock.yaml");
+    const patchPath = join(profileDir, "cordis.patch.yml");
+    const nmDir = join(profileDir, "node_modules");
+
+    // 1. package.json 存在性
+    if (!fs.existsSync(pkgPath)) {
+      issues.push({ level: "error", check: "package.json", msg: "package.json 不存在" });
+      return { healthy: false, issues, profileDir, hasPackageJson: false, hasLock: false, hasPatch: false, hasNodeModules: false };
+    }
+
+    let pkg;
+    try {
+      pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+    } catch {
+      issues.push({ level: "error", check: "package.json", msg: "package.json 无法解析（JSON 格式错误）" });
+      return { healthy: false, issues, profileDir, hasPackageJson: true, hasLock: false, hasPatch: false, hasNodeModules: false };
+    }
+
+    const bundles = pkg["dsh.profile.bundles"] || [];
+    const deps = pkg.dependencies || {};
+
+    // 2. bundle 声明与 node_modules 一致性
+    for (const b of bundles) {
+      if (b.startsWith("@deepseek-ai/dsh-")) continue;
+      const dir = join(profileDir, "node_modules", ...b.split("/"));
+      if (!fs.existsSync(dir)) {
+        // 进一步判断：是安装不完整还是卸载不完整
+        const inLock = fs.existsSync(lockPath) && fs.readFileSync(lockPath, "utf8").includes(b);
+        const inDeps = b in deps;
+        if (inLock && inDeps) {
+          issues.push({ level: "error", check: "bundle/node_modules", pkg: b, msg: `${b} 已在 lock 和 dependencies 中声明，但 node_modules 目录缺失（安装不完整或依赖损坏）` });
+        } else if (inDeps && !inLock) {
+          issues.push({ level: "error", check: "bundle/lock", pkg: b, msg: `${b} 仍在 dependencies 中但 lock 已移除（卸载操作未完成，DSH 将无法解析此 bundle）。请重新执行 "dsh plugin --profile web remove ${b}" 完成卸载，或 "dsh plugin --profile web install" 重新安装` });
+        } else {
+          issues.push({ level: "error", check: "bundle", pkg: b, msg: `${b} 在 bundles 中声明但 node_modules 和 dependencies 均不存在（孤立引用）` });
+        }
+      }
+    }
+
+    // 3. dependencies 中有但 bundles 中没有的包（普通依赖，需在 patch 中挂载才生效）
+    // 这不是错误，是信息性提示
+    const standaloneDeps = Object.keys(deps).filter(
+      (d) => !d.startsWith("@deepseek-ai/dsh-") && !bundles.includes(d) && d !== "pnpm" && d !== "node-addon-api"
+    );
+    if (standaloneDeps.length > 0) {
+      issues.push({ level: "info", check: "standalone-deps", msg: `${standaloneDeps.length} 个依赖未在 bundles 中声明（如需加载，请在 cordis.patch.yml 中挂载）` });
+    }
+
+    // 4. cordis.patch.yml 存在性（仅检查是否存在，不解析内容）
+    if (fs.existsSync(patchPath)) {
+      const content = fs.readFileSync(patchPath, "utf8").trim();
+      if (content === "" || content === "[]") {
+        issues.push({ level: "info", check: "patch", msg: "cordis.patch.yml 为空（无用户自定义 patch）" });
+      }
+    }
+
+    return {
+      healthy: issues.filter((i) => i.level === "error").length === 0,
+      issues,
+      profileDir,
+      hasPackageJson: fs.existsSync(pkgPath),
+      hasLock: fs.existsSync(lockPath),
+      hasPatch: fs.existsSync(patchPath),
+      hasNodeModules: fs.existsSync(nmDir),
+    };
   }
 
   /** 从 bin.js 同级的 package.json 读取 DSH 版本（不额外启动进程）。 */
