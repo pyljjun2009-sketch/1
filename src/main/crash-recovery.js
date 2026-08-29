@@ -26,9 +26,9 @@ class CrashRecovery extends EventEmitter {
     this.backupManager = backupManager; // 可选：用于创建恢复前备份
   }
 
-  /** 应用启动时调用：记录退出状态。 */
+  /** 应用启动时调用：记录退出状态。写入失败不影响应用退出（静默忽略）。 */
   markCleanExit() {
-    writeFileSync(this.cleanExitFile, new Date().toISOString(), "utf8");
+    try { writeFileSync(this.cleanExitFile, new Date().toISOString(), "utf8"); } catch { /* 忽略磁盘错误 */ }
   }
 
   /** 清除退出标记（应用正常启动后调用，表示已接管）。 */
@@ -50,10 +50,10 @@ class CrashRecovery extends EventEmitter {
     }
   }
 
-  /** 增加崩溃计数。 */
+  /** 增加崩溃计数。写入失败时仍返回当前值（内存兜底）。 */
   incrementCrashCount() {
     const count = this.getCrashCount() + 1;
-    writeFileSync(this.crashCountFile, String(count), "utf8");
+    try { writeFileSync(this.crashCountFile, String(count), "utf8"); } catch { /* 忽略磁盘错误 */ }
     return count;
   }
 

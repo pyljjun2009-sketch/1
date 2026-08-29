@@ -106,15 +106,22 @@ class BackupManager extends EventEmitter {
     mkdirSync(dir, { recursive: true });
 
     const snap = this._snapshot();
-    // 写入关键文件
-    for (const [relPath, content] of Object.entries(snap)) {
-      const target = relPath.startsWith(".") ? join(dir, relPath) : join(dir, "profiles-web", relPath);
-      mkdirSync(dirname(target), { recursive: true });
-      writeFileSync(target, content, "utf8");
+    let manifest;
+    try {
+      // 写入关键文件
+      for (const [relPath, content] of Object.entries(snap)) {
+        const target = relPath.startsWith(".") ? join(dir, relPath) : join(dir, "profiles-web", relPath);
+        mkdirSync(dirname(target), { recursive: true });
+        writeFileSync(target, content, "utf8");
+      }
+      // 写入 manifest
+      manifest = this._manifest(id, note);
+      writeFileSync(join(dir, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
+    } catch (err) {
+      // 写入失败时清理已创建的目录，避免留下半完成的备份
+      try { rmSync(dir, { recursive: true, force: true }); } catch { /* 忽略 */ }
+      throw new Error(`备份创建失败（磁盘写入错误）：${err.message}`);
     }
-    // 写入 manifest
-    const manifest = this._manifest(id, note);
-    writeFileSync(join(dir, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
 
     this.emit("created", { id, note, dir });
 
