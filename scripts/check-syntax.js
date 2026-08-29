@@ -1,12 +1,12 @@
 /**
- * 语法检查：对 src/、test/、scripts/ 下所有 .js 文件执行 `node --check`。
+ * 语法检查：对 src/、test/、scripts/、assets/ 下所有 .js 文件执行 `node --check`。
  * 任一失败即退出码 1。用法：node scripts/check-syntax.js
  */
 const { spawnSync } = require("node:child_process");
 const { readdirSync, statSync } = require("node:fs");
 const { join, relative } = require("node:path");
 
-const ROOTS = ["src", "test", "scripts"];
+const ROOTS = ["src", "test", "scripts", "assets"];
 const files = [];
 
 function walk(dir) {

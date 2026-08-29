@@ -7,10 +7,30 @@
  */
 const { ipcMain, app, shell } = require("electron");
 const { settings } = require("./config.js");
+const { denyPermissions } = require("./window.js");
 const CH = require("../shared/channels.js");
 
 /** 渲染进程禁止通过 IPC 修改的字段（可执行注入面）。 */
 const IPC_RESTRICTED_FIELDS = ["dshCommand", "nodeBin"];
+const SETTINGS_PAGE_SUFFIX = "/assets/settings.html";
+
+/** 只有本地设置页可调用会改变配置、文件或依赖的管理通道。 */
+function assertSettingsPage(event) {
+  const url = event?.senderFrame?.url;
+  if (typeof url !== "string" || !url.startsWith("file:") || !new URL(url).pathname.endsWith(SETTINGS_PAGE_SUFFIX)) {
+    throw new Error("此管理操作只能从本地设置页发起");
+  }
+}
+
+function isSafeExternalUrl(value) {
+  if (typeof value !== "string" || value.length > 2048) return false;
+  try {
+    const url = new URL(value);
+    return (url.protocol === "http:" || url.protocol === "https:") && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
 
 function safeSend(win, channel, payload) {
   if (!win || win.isDestroyed()) return;
@@ -37,10 +57,14 @@ function registerIpc({ server, getWindow, upgradeManager, backupManager, crashRe
     return status;
   });
 
-  ipc.handle(CH.GET_CONFIG, () => settings.all);
+  ipc.handle(CH.GET_CONFIG, (event) => {
+    assertSettingsPage(event);
+    return settings.all;
+  });
 
   ipc.handle(CH.SET_CONFIG, (event, patch) => {
-    if (!patch || typeof patch !== "object") {
+    assertSettingsPage(event);
+    if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
       throw new Error("配置补丁必须是对象");
     }
     const restricted = Object.keys(patch).filter((k) => IPC_RESTRICTED_FIELDS.includes(k));
@@ -58,7 +82,7 @@ function registerIpc({ server, getWindow, upgradeManager, backupManager, crashRe
   });
 
   ipc.handle(CH.OPEN_EXTERNAL, async (event, url) => {
-    if (typeof url === "string" && /^https?:/i.test(url)) {
+    if (isSafeExternalUrl(url)) {
       await shellApi.openExternal(url);
       return { ok: true };
     }
@@ -73,7 +97,8 @@ function registerIpc({ server, getWindow, upgradeManager, backupManager, crashRe
     dsh: server.version,
   }));
 
-  ipc.handle(CH.OPEN_DEVTOOLS, () => {
+  ipc.handle(CH.OPEN_DEVTOOLS, (event) => {
+    assertSettingsPage(event);
     const win = getWindow();
     if (win && !win.isDestroyed()) win.webContents.openDevTools({ mode: "detach" });
     return true;
@@ -96,29 +121,39 @@ function registerIpc({ server, getWindow, upgradeManager, backupManager, crashRe
       parent: getWindow(), modal: true, show: false,
       webPreferences: { preload: join(__dirname, "..", "preload", "preload-settings.js"), contextIsolation: true, nodeIntegration: false, sandbox: true },
     });
+    denyPermissions(settingsWin.webContents);
     settingsWin.setMenuBarVisibility(false);
     settingsWin.loadFile(join(__dirname, "..", "..", "assets", "settings.html"));
     settingsWin.once("ready-to-show", () => settingsWin.show());
     return true;
   });
 
-  ipc.handle(CH.UPGRADE_CHECK, (event, track) => upgradeManager.check(track));
-  ipc.handle(CH.UPGRADE_APPLY, (event, track, targetVersion) =>
-    upgradeManager.apply(track, targetVersion)
-  );
+  ipc.handle(CH.UPGRADE_CHECK, (event, track) => {
+    assertSettingsPage(event);
+    return upgradeManager.check(track);
+  });
+  ipc.handle(CH.UPGRADE_APPLY, (event, track, targetVersion) => {
+    assertSettingsPage(event);
+    return upgradeManager.apply(track, targetVersion);
+  });
 
   // 备份/恢复
-  ipc.handle(CH.BACKUP_CREATE, (event, note) => backupManager.create(note));
-  ipc.handle(CH.BACKUP_LIST, () => backupManager.list());
-  ipc.handle(CH.BACKUP_RESTORE, (event, id) => backupManager.restore(id));
-  ipc.handle(CH.BACKUP_DIFF, (event, id) => backupManager.diff(id));
-  ipc.handle(CH.BACKUP_DELETE, (event, id) => backupManager.delete(id));
+  ipc.handle(CH.BACKUP_CREATE, (event, note) => {
+    assertSettingsPage(event);
+    if (note !== null && note !== undefined && (typeof note !== "string" || note.length > 500)) throw new Error("备份备注必须是 500 字符以内的文本");
+    return backupManager.create(note || null);
+  });
+  ipc.handle(CH.BACKUP_LIST, (event) => { assertSettingsPage(event); return backupManager.list(); });
+  ipc.handle(CH.BACKUP_RESTORE, (event, id) => { assertSettingsPage(event); return backupManager.restore(id); });
+  ipc.handle(CH.BACKUP_DIFF, (event, id) => { assertSettingsPage(event); return backupManager.diff(id); });
+  ipc.handle(CH.BACKUP_DELETE, (event, id) => { assertSettingsPage(event); return backupManager.delete(id); });
 
   // 崩溃恢复
-  ipc.handle(CH.CRASH_GET_STATUS, () => crashRecovery.getStatus());
-  ipc.handle(CH.CRASH_DIAGNOSE, () => crashRecovery.diagnose());
-  ipc.handle(CH.CRASH_MARK_CLEAN, () => { crashRecovery.markCleanExit(); return true; });
-  ipc.handle(CH.CRASH_RESET, () => {
+  ipc.handle(CH.CRASH_GET_STATUS, (event) => { assertSettingsPage(event); return crashRecovery.getStatus(); });
+  ipc.handle(CH.CRASH_DIAGNOSE, (event) => { assertSettingsPage(event); return crashRecovery.diagnose(); });
+  ipc.handle(CH.CRASH_MARK_CLEAN, (event) => { assertSettingsPage(event); crashRecovery.markCleanExit(); return true; });
+  ipc.handle(CH.CRASH_RESET, (event) => {
+    assertSettingsPage(event);
     const backup = backupManager.create("重置前自动备份");
     const { rmSync, mkdirSync } = require("node:fs");
     const profileDir = require("node:path").join(crashRecovery.dshHome, "profiles", "web");
@@ -127,7 +162,8 @@ function registerIpc({ server, getWindow, upgradeManager, backupManager, crashRe
     return { reset: true, backupId: backup.id };
   });
 
-  ipc.handle(CH.CRASH_RESYNC, () => {
+  ipc.handle(CH.CRASH_RESYNC, (event) => {
+    assertSettingsPage(event);
     // 修复插件依赖不一致：执行 dsh plugin install 统一 package.json/lock/node_modules 状态
     const { spawnSync } = require("node:child_process");
     try {
@@ -145,8 +181,8 @@ function registerIpc({ server, getWindow, upgradeManager, backupManager, crashRe
     }
   });
 
-  ipc.handle(CH.CRASH_CHECK_PROFILE, () => {
-    const { readFileSync } = require("node:fs");
+  ipc.handle(CH.CRASH_CHECK_PROFILE, (event) => {
+    assertSettingsPage(event);
     const dshHome = crashRecovery.dshHome;
     const profileDir = require("node:path").join(dshHome, "profiles", "web");
     // 导入 DshServer 以使用 _checkProfileHealth
@@ -173,4 +209,4 @@ function registerIpc({ server, getWindow, upgradeManager, backupManager, crashRe
   return { server, getWindow, upgradeManager, backupManager, crashRecovery };
 }
 
-module.exports = { registerIpc, IPC_RESTRICTED_FIELDS, safeSend };
+module.exports = { registerIpc, IPC_RESTRICTED_FIELDS, assertSettingsPage, isSafeExternalUrl, safeSend };

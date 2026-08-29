@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; script-src 'self'" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" />
   <title>设置</title>
   <style>
     :root { color-scheme: dark; }
@@ -125,9 +125,14 @@
 
   <div class="toast" id="toast"></div>
 
-  <script>
-    const dsh = window.dshDesktop;
+  <script src="settings.js"></script>
+<!--
+  settings.js is deliberately external: this page runs with the privileged settings
+  preload, so CSP must not permit inline scripts or inline event handlers.
+-->
 
+<!-- Legacy inline implementation retained as an inert migration record. -->
+<!--
     // Tab switching
     document.querySelectorAll(".tab").forEach((tab) => {
       tab.addEventListener("click", () => {
@@ -343,6 +348,9 @@
             ${r.status === "update-available" && t.track === "profile"
               ? `<button class="btn primary" style="margin-top:8px;" onclick="applyProfileUpgrade()">更新 Profile bundles</button>`
               : ""}
+            ${r.status === "update-available" && t.track === "backend"
+              ? `<button class="btn primary" style="margin-top:8px;" onclick="applyBackendUpgrade()">升级 DSH 后端（自动备份+重启）</button>`
+              : ""}
           </div>`;
         } catch {
           html += `<div class="status-card"><strong>${t.label}</strong> <span class="badge err">检查失败</span></div>`;
@@ -359,6 +367,20 @@
       loadUpgrade();
     }
 
+    async function applyBackendUpgrade() {
+      if (!confirm("将升级 DSH 官方后端：自动备份 Profile → npm 安装新版本 → 校验 → 同步依赖 → 重启后端。\n升级前请保存当前工作。确定？")) return;
+      document.getElementById("upgrade-status-msg").textContent = "正在升级 DSH 后端（可能需要几分钟）…";
+      try {
+        const r = await dsh.upgrade.apply("backend");
+        toast(r.message || r.reason || "操作完成");
+        if (!r.applied && r.output) alert("升级输出：\n\n" + r.output.slice(-2000));
+        if (r.hint) alert("提示：\n\n" + r.hint);
+      } catch (e) {
+        toast("升级失败: " + e.message);
+      }
+      loadUpgrade();
+    }
+
     document.getElementById("btn-check-upgrade").addEventListener("click", async () => {
       document.getElementById("upgrade-status-msg").textContent = "检查中…";
       await loadUpgrade();
@@ -371,5 +393,6 @@
     loadConfig();
     loadAbout();
   </script>
+-->
 </body>
 </html>

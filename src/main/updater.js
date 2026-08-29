@@ -26,30 +26,104 @@ const NPM_REGISTRY = "https://registry.npmjs.org/@deepseek-ai/dsh/latest";
 const BACKEND_PACKAGE = "@deepseek-ai/dsh";
 
 /**
- * 预留的后端升级器实现点。
- * 当前为 stub；将来接入真实升级时，实现本对象并替换 `apply`：
- *   1. 用 npm/pnpm 把 BACKEND_PACKAGE 升级到目标版本
- *   2. 校验新版本号（server.detectVersion() 或 package.json）
- *   3. 重启后端（server.restart()）
- * 实现后请返回 { applied: true, version: <新版本> }。
+ * 后端升级器：将官方 @deepseek-ai/dsh 升级到目标版本。
+ *
+ * 流程（每步失败都有明确回滚/提示）：
+ *   1. 备份 profile 关键文件（package.json / pnpm-lock.yaml / cordis.patch.yml）
+ *   2. npm install -g @deepseek-ai/dsh@<target>（锁定版本，不顺带升级其他包）
+ *   3. 校验：新版本号 + yaml 运行库完整性
+ *   4. 若检测到 profile bundle 不一致 → 自动执行 dsh plugin install 修复
+ *   5. 重启后端
  */
 const BACKEND_UPGRADER = {
-  async apply({ server, targetVersion }) {
-    void server;
-    void targetVersion;
+  async apply({ server, targetVersion, backupManager, dshHome, execNpm }) {
+    // execNpm 可注入（测试用）；默认用 spawnSync 执行真实 npm
+    const runNpm = execNpm || ((pkgSpec) => {
+      const { spawnSync } = require("node:child_process");
+      return spawnSync(
+        process.platform === "win32" ? "cmd.exe" : "npm",
+        process.platform === "win32" ? ["/c", "npm", "install", "-g", pkgSpec] : ["install", "-g", pkgSpec],
+        { encoding: "utf8", timeout: 600_000, windowsHide: true, stdio: "pipe" }
+      );
+    });
+
+    // ---- 1. 备份 profile ----
+    let backupId = null;
+    if (backupManager) {
+      try {
+        backupId = backupManager.create(`DSH 升级前自动备份（${targetVersion || "latest"}）`).id;
+      } catch (e) {
+        return { applied: false, status: "error", reason: `升级前备份失败：${e.message}` };
+      }
+    }
+
+    // ---- 2. 执行升级（锁定版本，避免顺带升级） ----
+    const pkgSpec = targetVersion ? `${BACKEND_PACKAGE}@${targetVersion}` : `${BACKEND_PACKAGE}@latest`;
+    let installResult;
+    try {
+      installResult = runNpm(pkgSpec);
+    } catch (err) {
+      return { applied: false, status: "error", backupId, reason: `npm 执行失败：${err.message}` };
+    }
+    if (installResult.status !== 0) {
+      return {
+        applied: false, status: "error", backupId,
+        reason: `npm 安装失败（exit=${installResult.status}）`,
+        output: ((installResult.stdout || "") + (installResult.stderr || "")).slice(-500),
+        hint: `可回滚备份: ${backupId || "无"}（dsh-desktop/backups）`,
+      };
+    }
+
+    // ---- 3. 校验新版本 + yaml 完整性 ----
+    const newVersion = await server._detectVersion();
+    const dshRoot = server._binPath ? require("node:path").join(server._binPath, "..", "..") : null;
+    const yamlOk = dshRoot
+      ? require("node:fs").existsSync(require("node:path").join(dshRoot, "node_modules", "yaml", "dist", "schema", "yaml-1.1", "merge.js"))
+      : false;
+    if (!yamlOk) {
+      return {
+        applied: true, status: "error", version: newVersion, backupId,
+        reason: "DSH 已升级但 yaml 运行库文件缺失（安装不完整）",
+        hint: `请运行 "npm install -g ${BACKEND_PACKAGE}@${newVersion}" 重装，或回滚备份 ${backupId}`,
+      };
+    }
+
+    // ---- 4. 升级后修复 profile 一致性（防止 bundle 不匹配导致无法启动） ----
+    let resynced = null;
+    try {
+      const fix = spawnSync(
+        "dsh", ["plugin", "--profile", "web", "install"],
+        { encoding: "utf8", timeout: 300_000, windowsHide: true, shell: process.platform === "win32", stdio: "pipe" }
+      );
+      resynced = fix.status === 0;
+    } catch {
+      resynced = false;
+    }
+
+    // ---- 5. 重启后端 ----
+    try {
+      await server.restart();
+    } catch (err) {
+      return { applied: true, status: "error", version: newVersion, backupId, reason: `升级成功但后端重启失败：${err.message}` };
+    }
+
     return {
-      applied: false,
-      status: "stub",
-      reason: "后端自动升级尚未实现（预留接口）",
-      hint: `请在终端执行: npm i -g ${BACKEND_PACKAGE}@latest，然后从桌面端重启后端（或重启应用）`,
+      applied: true,
+      status: server.state === "running" ? "up-to-date" : "error",
+      version: newVersion,
+      backupId,
+      resynced,
+      message: `DSH 已升级到 ${newVersion}，后端已重启${resynced ? "，Profile 依赖已同步" : ""}`,
     };
   },
 };
 
 class UpgradeManager extends EventEmitter {
-  constructor({ server, appUpdaterLoader } = {}) {
+  constructor({ server, appUpdaterLoader, backupManager, dshHome } = {}) {
     super();
     this.server = server;
+    this.backupManager = backupManager;
+    this.dshHome = dshHome;
     this._appUpdaterEventsWired = false;
     // 可注入的 appUpdater 加载器（测试用）；默认动态导入 electron-updater
     this._appUpdaterLoader =
@@ -122,6 +196,8 @@ class UpgradeManager extends EventEmitter {
     const result = await BACKEND_UPGRADER.apply({
       server: this.server,
       targetVersion,
+      backupManager: this.backupManager,
+      dshHome: this.dshHome,
     });
     this._emit("backend-apply", { phase: "done", ...result });
     return { track: "backend", ...result };

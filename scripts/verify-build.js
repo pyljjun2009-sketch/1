@@ -29,7 +29,7 @@ const required = [
   "index.js", "dsh-server.js", "config.js", "ipc.js", "window.js",
   "updater.js", "backup.js", "crash-recovery.js",
   "preload.js", "preload-settings.js", "channels.js",
-  "loading.html", "settings.html", "icon.png", "package.json",
+  "loading.html", "loading.js", "settings.html", "settings.js", "icon.png", "package.json",
 ];
 
 let pass = 0;

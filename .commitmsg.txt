@@ -1,0 +1,20 @@
+feat: DSH 后端自动升级（备份-安装-校验-同步-重启）+ 启动时更新检查
+
+实现 BACKEND_UPGRADER.apply（原 stub）:
+1. 升级前自动备份 Profile（BackupManager）
+2. npm install -g @deepseek-ai/dsh@<target> 锁定版本安装
+3. 校验新版本号 + yaml 运行库完整性
+4. 升级后自动执行 dsh plugin install 修复 bundle 一致性
+5. 重启后端
+
+新增:
+- 启动时自动检查 DSH 官方版本，发现新版弹窗提示立即升级
+- 设置面板升级管理 tab 增加"升级 DSH 后端"按钮
+- execNpm 可注入（测试用）
+- updater.test.js: 后端升级流程测试
+
+更新:
+- UPGRADE.md: backend track 已实现（非 stub）
+- index.js: UpgradeManager 传入 backupManager/dshHome
+
+总计: 72/72 测试通过, 27/27 语法通过

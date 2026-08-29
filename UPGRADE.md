@@ -7,7 +7,7 @@
 | track | 含义 | 当前状态 | 接入点 |
 | --- | --- | --- | --- |
 | `app` | 桌面应用自升级 | 已内置 `electron-updater`；未配置发布源时 `status:"not-configured"` | `electron-builder.yml` 的 `publish` 配置 |
-| `backend` | DSH 后端（npm 包 `@deepseek-ai/dsh`）升级 | `check()` 已实现；`apply()` 为 `status:"stub"` | `src/main/updater.js` 的 `BACKEND_UPGRADER` |
+| `backend` | DSH 后端（npm 包 `@deepseek-ai/dsh`）升级 | `check()` 已实现；`apply()` **已实现**（备份→npm→校验→同步→重启） | `src/main/updater.js` 的 `BACKEND_UPGRADER` |
 | `profile` | Profile bundle 依赖更新 | `check()` 已实现（对比 npm registry）；`apply()` 已实现（`dsh plugin update`） | `src/main/updater.js` 的 `_checkProfile`/`_applyProfile` |
 
 `status` 枚举（结果对象统一携带）：
@@ -58,23 +58,31 @@ const unsubscribe = window.dshDesktop.upgrade.onEvent((payload) => { ... });
 
 ## 接入 2：后端自动升级（backend track）
 
-`apply()` 当前返回 stub：
+**已实现**（`src/main/updater.js` 的 `BACKEND_UPGRADER.apply`）。
 
-```js
-{ applied: false, status: "stub", reason: "后端自动升级尚未实现（预留接口）", hint: "npm i -g @deepseek-ai/dsh@latest ..." }
+升级流程（每步失败有明确回滚/提示）：
+
+```text
+1. 备份 Profile（package.json / pnpm-lock.yaml / cordis.patch.yml）→ BackupManager
+2. npm install -g @deepseek-ai/dsh@<target>（锁定版本，不顺带升级）
+3. 校验：新版本号 + yaml 运行库完整性
+4. 升级后自动执行 dsh plugin --profile web install 修复 bundle 一致性
+5. 重启后端
 ```
 
-实现真实升级时，替换 `src/main/updater.js` 中的 `BACKEND_UPGRADER.apply`：
+触发方式：
+- **启动时自动检查**：后端就绪后对比 npm 最新版，发现新版本弹窗提示（"立即升级 / 稍后再说 / 查看详情"）；
+- **设置面板手动升级**：升级管理 tab → 检测到更新时显示"升级 DSH 后端（自动备份+重启）"按钮。
 
+可注入点：`BACKEND_UPGRADER.apply({ server, targetVersion, backupManager, dshHome, execNpm })`
+- `execNpm` 可注入（测试用），默认用 `spawnSync` 执行真实 npm。
+
+返回示例：
 ```js
-const BACKEND_UPGRADER = {
-  async apply({ server, targetVersion }) {
-    // 1) 用 npm/pnpm 升级 @deepseek-ai/dsh 到 targetVersion（可经 execFile 调用 npm）
-    // 2) 校验新版本号（读取 server._binPath 同级 package.json 的 version）
-    // 3) 等待新版本校验通过后调用 await server.restart()
-    // 4) return { applied: true, status: "update-available", version: <新版本> }
-  },
-};
+// 成功
+{ applied: true, status: "up-to-date", version: "0.1.2-rc.1", backupId: "...", resynced: true, message: "DSH 已升级到 ..." }
+// 失败（npm 安装失败）
+{ applied: false, status: "error", backupId: "...", reason: "npm 安装失败（exit=1）", output: "...", hint: "可回滚备份: ..." }
 ```
 
 `server` 提供 `restart()`、`version`、`_binPath`、`status()` 等成员（见 `src/main/dsh-server.js`），升级器不应直接修改 DSH 本体文件。

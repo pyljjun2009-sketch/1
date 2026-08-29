@@ -15,6 +15,18 @@ function isServerOrigin(url, serverUrl) {
   }
 }
 
+/** DSH Web 与设置页均不需要直接申请操作系统权限，默认一律拒绝。 */
+function denyPermissions(webContents) {
+  const session = webContents?.session;
+  if (!session) return;
+  if (typeof session.setPermissionCheckHandler === "function") {
+    session.setPermissionCheckHandler(() => false);
+  }
+  if (typeof session.setPermissionRequestHandler === "function") {
+    session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+  }
+}
+
 function buildMenu({ restartServer, openUserDataDir, checkUpgrades, openSettings }) {
   const isMac = process.platform === "darwin";
   const template = [
@@ -91,6 +103,7 @@ function createMainWindow(server) {
       sandbox: true,
     },
   });
+  denyPermissions(win.webContents);
 
   // 只允许在本窗口内导航到本地后端同源地址；其余一律交给系统浏览器
   win.webContents.on("will-navigate", (event, url) => {
@@ -138,4 +151,4 @@ function createMainWindow(server) {
   return win;
 }
 
-module.exports = { createMainWindow, buildMenu };
+module.exports = { createMainWindow, buildMenu, denyPermissions };

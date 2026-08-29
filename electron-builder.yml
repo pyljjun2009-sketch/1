@@ -12,9 +12,7 @@ directories:
 
 files:
   - src/**
-  - assets/loading.html
-  - assets/settings.html
-  - assets/icon.png
+  - assets/**
   - package.json
 
 asar: true

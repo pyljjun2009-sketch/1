@@ -53,13 +53,41 @@ test("backend check: registry 不可达 -> status error + reason", async () => {
   }
 });
 
-test("backend apply: 预留 stub，明确返回未实现", async () => {
-  const m = new UpgradeManager({ server: fakeServer("0.1.0") });
-  const r = await m.apply("backend");
-  assert.equal(r.track, "backend");
-  assert.equal(r.status, "stub");
+test("backend apply: npm 安装失败时返回 error + 备份ID", async () => {
+  const m = new UpgradeManager({
+    server: fakeServer("0.1.0"),
+    backupManager: { create: () => ({ id: "backup-test-001" }) },
+    dshHome: process.env.TEMP,
+  });
+  // 注入失败的 npm 执行器（不真正执行 npm install）
+  const r = await BACKEND_UPGRADER.apply({
+    server: fakeServer("0.1.0"),
+    backupManager: { create: () => ({ id: "backup-test-001" }) },
+    dshHome: process.env.TEMP,
+    execNpm: () => ({ status: 1, stdout: "", stderr: "ENOTFOUND registry.npmjs.org" }),
+  });
+  assert.equal(r.track, undefined); // 直接调用 BACKEND_UPGRADER.apply
   assert.equal(r.applied, false);
-  assert.ok(r.hint.includes(BACKEND_PACKAGE));
+  assert.equal(r.status, "error");
+  assert.equal(r.backupId, "backup-test-001");
+  assert.ok(r.reason.includes("npm 安装失败"));
+  void m;
+});
+
+test("backend apply: npm 成功但 yaml 缺失时报错并提示回滚", async () => {
+  const server = fakeServer("9.9.9");
+  // server._detectVersion 返回新版本，但 _binPath 指向不存在的路径（yaml 检查失败）
+  server._binPath = "C:\\nonexistent\\bin.js";
+  const r = await BACKEND_UPGRADER.apply({
+    server,
+    backupManager: { create: () => ({ id: "backup-test-002" }) },
+    dshHome: process.env.TEMP,
+    execNpm: () => ({ status: 0, stdout: "up to date", stderr: "" }),
+  });
+  assert.equal(r.applied, true); // npm 安装已执行
+  assert.equal(r.status, "error"); // yaml 校验失败
+  assert.ok(r.reason.includes("yaml"));
+  assert.ok(r.hint.includes("回滚"));
 });
 
 test("app check: electron-updater 不可用 -> not-configured（不抛错）", async () => {
@@ -153,7 +181,11 @@ test("事件转发: onEvent sink 收到 backend-check", async () => {
   }
 });
 
-test("BACKEND_UPGRADER 钩子存在且为 stub（升级接口预留点）", () => {
+test("BACKEND_UPGRADER 升级器已实现（非 stub）", () => {
   assert.equal(typeof BACKEND_UPGRADER.apply, "function");
   assert.ok(BACKEND_PACKAGE.length > 0);
+  // 升级器源码应包含备份/安装/校验步骤（不再返回 stub 状态）
+  const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "src", "main", "updater.js"), "utf8");
+  assert.ok(src.includes("升级前自动备份"), "应包含备份步骤");
+  assert.ok(src.includes("runNpm"), "应包含可注入的 npm 执行器");
 });

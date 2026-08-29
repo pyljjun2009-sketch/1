@@ -13,7 +13,7 @@
 - 🔌 升级接口：应用自升级 + 后端升级 + Profile bundle 更新三条轨道，状态机诚实报告，见 `UPGRADE.md`
 - 💾 数据备份/恢复：一键备份 DSH profile（bundle 清单/patch 配置），支持恢复/对比/删除，自动保留最近 10 份
 - 🔧 崩溃恢复：启动时检测异常退出，连续崩溃 3 次后弹诊断对话框，支持一键恢复或 Profile 重置
-- 🔒 安全：contextIsolation + 沙箱 preload；外部链接交给系统浏览器；配置 schema 校验；渲染进程禁止通过 IPC 修改 `dshCommand`/`nodeBin`（防任意命令注入）
+- 🔒 安全：contextIsolation + 沙箱 preload；DSH 页面与设置页最小权限分离；设置管理 IPC 仅接受本地设置页调用；默认拒绝系统权限；外链、配置与备份参数均校验
 - ⚙️ 可配置 + 设置面板：Ctrl+, 打开，集成备份管理/崩溃恢复/通用配置/升级状态/关于
 
 ## 环境要求
@@ -39,10 +39,10 @@ npm run start:safe   # 安全模式（等同 --safe-mode，强制 inprocess GPU�
 ## 测试与质量
 
 ```bash
-npm test                  # 全部单元测试（65 个用例）
+npm test                  # 全部单元测试（71 个用例）
 npm run test:unit         # 配置/升级/IPC 快速单测
 npm run test:process      # Windows 进程树与停止确认（dsh-server）
-npm run test:syntax       # 全部 JS 语法检查（23 个文件）
+npm run test:syntax       # 全部 JS 语法检查（27 个文件，含本地页面脚本）
 npm run test:smoke        # 冒烟（真实 dsh，依赖本机全局安装）
 npm run test:smoke:fixture# 冒烟（内置假 DSH fixture，CI 可用，不依赖本机 dsh）
 npm run test:package      # 解包构建 + ASAR 内容验证（15 个关键文件）
@@ -136,7 +136,7 @@ DSHaness/
 ├─ test/               # node:test 单元测试（60 个用例）
 ├─ scripts/            # check-syntax / clean / build / init-smoke-settings / verify-build
 ├─ docs/adr/           # 架构决策记录（ADR-001/002）
-├─ assets/             # 图标、加载页、设置页
+├─ assets/             # 图标、加载页/设置页及受 CSP 保护的页面脚本
 ├─ electron-builder.yml
 ├─ UPGRADE.md          # 升级接口设计文档
 └─ PLAN-2.0.md         # 2.0 计划书

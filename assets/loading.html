@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta
     http-equiv="Content-Security-Policy"
-    content="default-src 'self'; style-src 'unsafe-inline'; script-src 'self'"
+    content="default-src 'self'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
   />
   <title>DeepSeek Harness Desktop</title>
   <style>
@@ -56,63 +56,6 @@
     <button id="retry" class="hidden">重新启动后端</button>
   </div>
 
-  <script>
-    const statusEl = document.getElementById("status");
-    const errorEl = document.getElementById("error");
-    const spinnerEl = document.getElementById("spinner");
-    const retryBtn = document.getElementById("retry");
-
-    function render(s) {
-      if (!s) return;
-      if (s.state === "running") {
-        statusEl.textContent = "后端已就绪，正在载入界面…";
-        errorEl.style.display = "none";
-        spinnerEl.classList.remove("hidden");
-      } else if (s.state === "starting" || s.state === "restarting") {
-        spinnerEl.classList.remove("hidden");
-        const diag = [
-          s.port ? "端口 " + s.port : "",
-          s.cwd ? "工作目录: " + s.cwd : "",
-        ].filter(Boolean).join(" · ");
-        statusEl.textContent = "正在启动后端…";
-        if (s.logTail && s.logTail.length) {
-          errorEl.style.display = "block";
-          errorEl.textContent = diag + "\n\n--- 后端日志 ---\n" + s.logTail.slice(-20).join("\n");
-        }
-      } else if (s.state === "error") {
-        spinnerEl.classList.add("hidden");
-        statusEl.textContent = "后端启动失败";
-        errorEl.style.display = "block";
-        const diag = [
-          s.cwd ? "工作目录: " + s.cwd : "",
-          s.launchCommand ? "命令: " + s.launchCommand.join(" ") : "",
-          s.launchSource ? "来源: " + s.launchSource : "",
-          s.lastExit ? "退出码: " + (s.lastExit.code ?? "?") + " 信号: " + (s.lastExit.signal ?? "无") : "",
-        ].filter(Boolean).join("\n");
-        errorEl.textContent =
-          (s.error || "未知错误") +
-          (diag ? "\n\n" + diag : "") +
-          "\n\n--- 后端日志（末尾） ---\n" + (s.logTail || []).slice(-30).join("\n");
-        retryBtn.classList.remove("hidden");
-      } else if (s.state === "stopped") {
-        statusEl.textContent = "后端已停止";
-        errorEl.style.display = "none";
-        spinnerEl.classList.add("hidden");
-      }
-    }
-
-    window.dshDesktop.getStatus().then(render);
-    window.dshDesktop.onStatus(render);
-    window.dshDesktop.onError(render);
-
-    retryBtn.addEventListener("click", async () => {
-      retryBtn.classList.add("hidden");
-      errorEl.style.display = "none";
-      spinnerEl.classList.remove("hidden");
-      statusEl.textContent = "正在重新启动…";
-      const s = await window.dshDesktop.restart();
-      render(s);
-    });
-  </script>
+  <script src="loading.js"></script>
 </body>
 </html>

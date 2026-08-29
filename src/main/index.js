@@ -26,7 +26,7 @@ const { join } = path;
 const { app, BrowserWindow } = require("electron");
 const { settings } = require("./config.js");
 const { DshServer } = require("./dsh-server.js");
-const { createMainWindow, buildMenu } = require("./window.js");
+const { createMainWindow, buildMenu, denyPermissions } = require("./window.js");
 const { UpgradeManager } = require("./updater.js");
 const { registerIpc } = require("./ipc.js");
 const { BackupManager } = require("./backup.js");
@@ -134,9 +134,13 @@ if (!gotLock) {
     settings.init(app);
     dbg("whenReady: settings initialized");
     server = new DshServer();
-    const upgradeManager = new UpgradeManager({ server });
     backupManager = new BackupManager({
       backupDir: join(app.getPath("userData"), "backups"),
+      dshHome: process.env.DSH_HOME || join(require("os").homedir(), ".dsh"),
+    });
+    const upgradeManager = new UpgradeManager({
+      server,
+      backupManager,
       dshHome: process.env.DSH_HOME || join(require("os").homedir(), ".dsh"),
     });
     crashRecovery = new CrashRecovery({
@@ -170,6 +174,7 @@ if (!gotLock) {
           parent: mainWindow, modal: true, show: false,
           webPreferences: { preload: join(__dirname, "..", "preload", "preload-settings.js"), contextIsolation: true, nodeIntegration: false, sandbox: true },
         });
+        denyPermissions(settingsWin.webContents);
         settingsWin.setMenuBarVisibility(false);
         settingsWin.loadFile(join(__dirname, "..", "..", "assets", "settings.html"));
         settingsWin.once("ready-to-show", () => settingsWin.show());
@@ -293,11 +298,45 @@ if (!gotLock) {
         const count = crashRecovery.incrementCrashCount();
         dbg(`crash count: ${count}`);
       }
+
+      // 启动后自动检查 DSH 官方版本更新（非冒烟模式）
+      if (server.state === "running" && process.env.DSH_DESKTOP_SMOKE !== "1") {
+        checkDshUpdate(upgradeManager, mainWindow);
+      }
     } catch (err) {
       console.error("[dsh-desktop] 后端启动失败:", err);
       if (crashRecovery) crashRecovery.incrementCrashCount();
     }
   });
+
+  /** 检查 DSH 官方版本更新；有新版本时弹窗提示。 */
+  async function checkDshUpdate(upgradeManager, win) {
+    try {
+      const result = await upgradeManager.check("backend");
+      if (result.status !== "update-available" || !result.latest) return;
+      const { dialog } = require("electron");
+      const choice = await dialog.showMessageBox(win, {
+        type: "info",
+        title: "发现 DSH 新版本",
+        message: `DSH 官方版本更新可用：${result.current} → ${result.latest}`,
+        detail: "升级将自动备份 Profile、安装新版本、同步依赖并重启后端。升级前请保存当前工作。",
+        buttons: ["立即升级", "稍后再说", "查看详情"],
+        defaultId: 0,
+        cancelId: 1,
+      });
+      if (choice.response === 0) {
+        const upgradeResult = await upgradeManager.apply("backend");
+        dialog.showMessageBox(win, {
+          type: upgradeResult.applied ? "info" : "error",
+          title: "DSH 升级" + (upgradeResult.applied ? "成功" : "失败"),
+          message: upgradeResult.message || upgradeResult.reason || "",
+          detail: upgradeResult.output || upgradeResult.hint || "",
+        });
+      }
+    } catch (err) {
+      dbg(`update check failed: ${err.message}`);
+    }
+  }
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0 && server) {

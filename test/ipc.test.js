@@ -6,7 +6,7 @@ const assert = require("node:assert/strict");
 const { mkdtempSync, rmSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
-const { registerIpc } = require("../src/main/ipc.js");
+const { registerIpc, isSafeExternalUrl } = require("../src/main/ipc.js");
 const { settings, Settings } = require("../src/main/config.js");
 const CH = require("../src/shared/channels.js");
 
@@ -21,7 +21,7 @@ function makeFakeIpc() {
     async invoke(channel, ...args) {
       const fn = handlers.get(channel);
       if (!fn) throw new Error(`no handler for ${channel}`);
-      return fn({}, ...args);
+      return fn({ senderFrame: { url: "file:///C:/test/assets/settings.html" } }, ...args);
     },
   };
 }
@@ -69,11 +69,26 @@ beforeEach(() => {
   };
   const fakeShell = { openExternal: async () => {} };
   const dir = mkdtempSync(join(tmpdir(), "dsh-ipc-"));
+  const fakeBackup = {
+    create: (note) => ({ id: "backup-id", note }),
+    list: () => [],
+    restore: (id) => ({ restored: id }),
+    diff: (id) => ({ id, identical: true, diffs: {} }),
+    delete: (id) => ({ deleted: id }),
+  };
+  const fakeCrash = {
+    dshHome: dir,
+    getStatus: () => ({}),
+    diagnose: () => ({ issues: [] }),
+    markCleanExit: () => {},
+  };
   new Settings().init({ getPath: () => dir, setLoginItemSettings: () => {} });
   registerIpc({
     server: fakeServer,
     getWindow: () => win,
     upgradeManager: fakeUpgrade,
+    backupManager: fakeBackup,
+    crashRecovery: fakeCrash,
     ipc,
     appApi: { getVersion: () => "0.1.0", setLoginItemSettings: () => {} },
     shellApi: fakeShell,
@@ -133,6 +148,29 @@ test("OPEN_EXTERNAL: 仅放行 http(s)", async () => {
   assert.equal(bad2.ok, false);
   const bad3 = await ipc.invoke(CH.OPEN_EXTERNAL, 42);
   assert.equal(bad3.ok, false);
+  const bad4 = await ipc.invoke(CH.OPEN_EXTERNAL, "https://user:pass@example.com");
+  assert.equal(bad4.ok, false);
+});
+
+test("管理 IPC 只允许本地设置页调用", async () => {
+  const handler = ipc.handlers.get(CH.SET_CONFIG);
+  assert.throws(
+    () => handler({ senderFrame: { url: "http://127.0.0.1:3080/" } }, { port: 8080 }),
+    /本地设置页/
+  );
+});
+
+test("管理 IPC 校验备份备注长度", async () => {
+  await assert.rejects(ipc.invoke(CH.BACKUP_CREATE, "x".repeat(501)), /500/);
+  const result = await ipc.invoke(CH.BACKUP_CREATE, "正常备注");
+  assert.equal(result.note, "正常备注");
+});
+
+test("外部 URL 校验拒绝凭据、非 HTTP 与超长输入", () => {
+  assert.ok(isSafeExternalUrl("https://example.com/docs"));
+  assert.ok(!isSafeExternalUrl("https://user:pass@example.com"));
+  assert.ok(!isSafeExternalUrl("file:///C:/Windows"));
+  assert.ok(!isSafeExternalUrl("https://example.com/" + "a".repeat(2050)));
 });
 
 test("UPGRADE_CHECK/APPLY 转发到 UpgradeManager", async () => {
