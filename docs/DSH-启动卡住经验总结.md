@@ -32,6 +32,79 @@ DSH 桌面端启动后长期停留在"正在启动 DeepSeek Harness / 初始化�
 | GPU 进程崩溃 | 启动即退（退出码 -2147483645） | `--safe-mode`（inprocess GPU） |
 | 配置文件损坏 | 无法解析 JSON | 删除 settings.json，重建默认配置 |
 
+## 二点五、每次审核的标准检查清单（版本 + 完整性）
+
+以下检查应在每次版本升级、插件变更或例行审核时执行，防止 DSH 版本落后或运行库损坏导致启动失败。
+
+### 1. 版本检查（对比 npm 最新版）
+
+```powershell
+# 查看本机已安装版本
+npm list -g @deepseek-ai/dsh --depth=0
+
+# 查看 npm 最新版（需要网络）
+npm view @deepseek-ai/dsh version
+
+# 查看版本发布时间线
+npm view @deepseek-ai/dsh time --json | Select-String -Pattern '"0\.' | Select-Object -Last 5
+```
+
+| 对比结果 | 处理 |
+|---|---|
+| 本机版本 < npm 最新版 | `npm install -g @deepseek-ai/dsh@<最新版>` 升级（先备份 profile） |
+| 本机版本 = npm 最新版 | ✅ 无需升级 |
+| npm 不可达（离线） | 检查 GitHub Releases 页，或确认本机版本可用即可 |
+
+> 已知版本时间线：`0.1.0-rc.6`(08-13) → `0.1.0-rc.7`(08-17) → `0.1.0-rc.8`(08-19) → `0.1.1-rc.1`(08-21) → `0.1.1-rc.2`(08-21 最新)
+
+### 2. 全局安装完整性检查（yaml 运行库）
+
+上次故障：yaml schema 子目录被清空导致 `Cannot find module '../schema/yaml-1.1/merge.js'`。每次审核应验证：
+
+```powershell
+# 关键文件是否存在
+Test-Path "$env:APPDATA\npm\node_modules\@deepseek-ai\dsh\node_modules\yaml\dist\schema\yaml-1.1\merge.js"
+
+# yaml schema 目录文件数（正常应为 20 个左右）
+(Get-ChildItem "$env:APPDATA\npm\node_modules\@deepseek-ai\dsh\node_modules\yaml\dist\schema\yaml-1.1" -File).Count
+
+# 四个 schema 子目录文件数（common:8, core:8, json:2, yaml-1.1:20）
+Get-ChildItem "$env:APPDATA\npm\node_modules\@deepseek-ai\dsh\node_modules\yaml\dist\schema" -Directory | ForEach-Object {
+  "$($_.Name): $((Get-ChildItem $_.FullName -File).Count) 个文件"
+}
+```
+
+| 检查结果 | 处理 |
+|---|---|
+| merge.js 存在且四个目录文件数正常 | ✅ 完整 |
+| 文件缺失或目录为空 | 锁定版本重装：`npm install -g @deepseek-ai/dsh@<当前版本>` |
+
+### 3. Profile 一致性检查（五项）
+
+```powershell
+# 检查 bundle 能否解析（返回码 0 = 可启动）
+dsh --profile web --dump-config
+
+# 桌面端自动检查（设置 → 崩溃恢复 → Profile 健康检查）
+```
+
+### 4. 桌面端健康检查
+
+```powershell
+npm run test:syntax    # 23/23 通过
+npm test               # 65/65 通过
+npm run test:smoke:fixture  # 冒烟测试
+```
+
+### 快速一条命令（PowerShell）
+
+```powershell
+# 一键检查版本 + 完整性
+$v = npm list -g @deepseek-ai/dsh --depth=0 2>$null | Select-String 'dsh@'; $latest = npm view @deepseek-ai/dsh version 2>$null;
+$yaml = Test-Path "$env:APPDATA\npm\node_modules\@deepseek-ai\dsh\node_modules\yaml\dist\schema\yaml-1.1\merge.js";
+Write-Output "已安装: $v | npm最新: $latest | yaml完整: $yaml"
+```
+
 ## 三、推荐排查顺序（优先级从高到低）
 
 ```text

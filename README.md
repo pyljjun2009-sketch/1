@@ -39,7 +39,7 @@ npm run start:safe   # 安全模式（等同 --safe-mode，强制 inprocess GPU�
 ## 测试与质量
 
 ```bash
-npm test                  # 全部单元测试（60 个用例）
+npm test                  # 全部单元测试（65 个用例）
 npm run test:unit         # 配置/升级/IPC 快速单测
 npm run test:process      # Windows 进程树与停止确认（dsh-server）
 npm run test:syntax       # 全部 JS 语法检查（23 个文件）
@@ -48,6 +48,9 @@ npm run test:smoke:fixture# 冒烟（内置假 DSH fixture，CI 可用，不依�
 npm run test:package      # 解包构建 + ASAR 内容验证（15 个关键文件）
 npm run clean             # 清理 dist/、dist-test/、dist-review/
 ```
+
+> **例行审核清单**：DSH 版本检查、全局安装完整性（yaml 模块）、Profile 五项一致性检查
+> 见 `docs/DSH-启动卡住经验总结.md` → "每次审核的标准检查清单" 章节。
 
 冒烟输出协议（退出码 0=成功 / 1=失败），FAIL 行附带完整诊断（state/error/cwd/command/source/bin/版本/lastExit/logTail）：
 
