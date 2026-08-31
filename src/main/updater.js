@@ -7,23 +7,50 @@
  *                      时才真正生效，否则返回 status:"not-configured" 与原因。
  *  track = "backend"  DSH 后端（npm 包 @deepseek-ai/dsh）升级。
  *                      check() 已实现：对比本地版本与 npm registry 最新版。
- *                      apply() 为预留 stub（status:"stub"）：替换 BACKEND_UPGRADER
- *                      钩子即可接入真实升级流程（见 UPGRADE.md）。
+ *                      apply() 已实现安全升级：备份、安装、校验、同步依赖并重启。
  *
  * 状态枚举（status）：
  *   not-configured    接口可用但未配置（无发布源 / electron-updater 不可用）
  *   up-to-date        已是最新
  *   update-available  发现新版本（尚未下载）
  *   update-downloaded 新版本已下载（重启应用后安装）
- *   stub              接口预留但未实现（后端自动升级）
  *   error             检查/执行失败（reason 含原因）
  *
  * 对外事件通过 onEvent(cb) 订阅，由 ipc.js 转发到渲染进程。
  */
 const { EventEmitter } = require("node:events");
+const { spawnSync } = require("node:child_process");
 
 const NPM_REGISTRY = "https://registry.npmjs.org/@deepseek-ai/dsh/latest";
 const BACKEND_PACKAGE = "@deepseek-ai/dsh";
+
+/** npm registry 返回的版本号，或设置页显式指定的安全 semver 版本。 */
+function isSafeVersion(version) {
+  return typeof version === "string"
+    && version.length <= 128
+    && /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version);
+}
+
+/**
+ * 用后端已验证的 node + DSH CLI 路径执行子命令。
+ * 不经 cmd.exe / shell，避免 PATH/命令行解释器改变参数含义。
+ */
+function runDshCli(server, args, options = {}) {
+  if (!server || typeof server._resolveLaunch !== "function") {
+    throw new Error("无法解析 DSH CLI：后端启动器不可用");
+  }
+  const launch = server._resolveLaunch();
+  if (!launch || !Array.isArray(launch.argv) || launch.argv.length < 2 || launch.argv.at(-1) !== "web") {
+    throw new Error("无法解析 DSH CLI：启动命令格式不受支持");
+  }
+  const [command, ...launchArgs] = launch.argv;
+  return spawnSync(command, [...launchArgs.slice(0, -1), ...args], {
+    encoding: "utf8",
+    windowsHide: true,
+    ...options,
+    shell: false,
+  });
+}
 
 /**
  * 后端升级器：将官方 @deepseek-ai/dsh 升级到目标版本。
@@ -36,7 +63,7 @@ const BACKEND_PACKAGE = "@deepseek-ai/dsh";
  *   5. 重启后端
  */
 const BACKEND_UPGRADER = {
-  async apply({ server, targetVersion, backupManager, dshHome, execNpm }) {
+  async apply({ server, targetVersion, backupManager, dshHome, execNpm, execDsh }) {
     // execNpm 可注入（测试用）；默认用 spawnSync 执行真实 npm
     const runNpm = execNpm || ((pkgSpec) => {
       const { spawnSync } = require("node:child_process");
@@ -46,6 +73,16 @@ const BACKEND_UPGRADER = {
         { encoding: "utf8", timeout: 600_000, windowsHide: true, stdio: "pipe" }
       );
     });
+
+    if (targetVersion !== undefined && targetVersion !== null && !isSafeVersion(targetVersion)) {
+      return { applied: false, status: "error", reason: "目标版本格式非法，只允许标准 semver 版本号" };
+    }
+    if (typeof server?._resolveLaunch === "function") {
+      const launch = server._resolveLaunch();
+      if (!launch || !String(launch.source || "").startsWith("npm global")) {
+        return { applied: false, status: "error", reason: "当前 DSH 使用自定义启动命令，无法安全地升级 npm 全局安装" };
+      }
+    }
 
     // ---- 1. 备份 profile ----
     let backupId = null;
@@ -91,10 +128,9 @@ const BACKEND_UPGRADER = {
     // ---- 4. 升级后修复 profile 一致性（防止 bundle 不匹配导致无法启动） ----
     let resynced = null;
     try {
-      const fix = spawnSync(
-        "dsh", ["plugin", "--profile", "web", "install"],
-        { encoding: "utf8", timeout: 300_000, windowsHide: true, shell: process.platform === "win32", stdio: "pipe" }
-      );
+      const fix = execDsh
+        ? execDsh(["plugin", "--profile", "web", "install"])
+        : runDshCli(server, ["plugin", "--profile", "web", "install"], { timeout: 300_000, stdio: "pipe" });
       resynced = fix.status === 0;
     } catch {
       resynced = false;
@@ -369,14 +405,16 @@ class UpgradeManager extends EventEmitter {
         message: "未发现 bundle 依赖",
       };
     }
-    const { spawnSync } = require("node:child_process");
-    const pkg = targetVersion || bundles.join(" ");
+    if (targetVersion !== undefined && targetVersion !== null) {
+      return {
+        track: "profile",
+        status: "error",
+        applied: false,
+        reason: "Profile 更新只允许已声明的 bundle，不接受任意目标包",
+      };
+    }
     try {
-      const r = spawnSync(
-        "dsh",
-        ["plugin", "--profile", "web", "update", ...pkg.split(" ")],
-        { encoding: "utf8", timeout: 120_000, windowsHide: true }
-      );
+      const r = runDshCli(this.server, ["plugin", "--profile", "web", "update", ...bundles], { timeout: 120_000 });
       const success = r.status === 0;
       this._emit("profile-update", { success, output: r.stdout + r.stderr });
       return {
@@ -391,4 +429,4 @@ class UpgradeManager extends EventEmitter {
   }
 }
 
-module.exports = { UpgradeManager, BACKEND_UPGRADER, BACKEND_PACKAGE };
+module.exports = { UpgradeManager, BACKEND_UPGRADER, BACKEND_PACKAGE, isSafeVersion, runDshCli };

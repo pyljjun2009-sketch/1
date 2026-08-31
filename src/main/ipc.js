@@ -8,6 +8,7 @@
 const { ipcMain, app, shell } = require("electron");
 const { settings } = require("./config.js");
 const { denyPermissions } = require("./window.js");
+const { runDshCli } = require("./updater.js");
 const CH = require("../shared/channels.js");
 
 /** 渲染进程禁止通过 IPC 修改的字段（可执行注入面）。 */
@@ -165,11 +166,9 @@ function registerIpc({ server, getWindow, upgradeManager, backupManager, crashRe
   ipc.handle(CH.CRASH_RESYNC, (event) => {
     assertSettingsPage(event);
     // 修复插件依赖不一致：执行 dsh plugin install 统一 package.json/lock/node_modules 状态
-    const { spawnSync } = require("node:child_process");
+    const { DshServer } = require("./dsh-server.js");
     try {
-      const r = spawnSync("dsh", ["plugin", "--profile", "web", "install"], {
-        encoding: "utf8", timeout: 180_000, windowsHide: true, shell: process.platform === "win32",
-      });
+      const r = runDshCli(new DshServer(), ["plugin", "--profile", "web", "install"], { timeout: 180_000 });
       const success = r.status === 0;
       return {
         resync: success,

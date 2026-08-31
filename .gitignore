@@ -16,3 +16,5 @@ dist-review/
 dsh-server.js
 dsh-server.js.map
 index.js.map
+
+.dsh-vision-toolkit/

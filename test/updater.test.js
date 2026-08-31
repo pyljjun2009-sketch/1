@@ -3,7 +3,7 @@
  */
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { UpgradeManager, BACKEND_UPGRADER, BACKEND_PACKAGE } = require("../src/main/updater.js");
+const { UpgradeManager, BACKEND_UPGRADER, BACKEND_PACKAGE, isSafeVersion } = require("../src/main/updater.js");
 
 function fakeServer(version) {
   return { version, _detectVersion: async () => version };
@@ -88,6 +88,60 @@ test("backend apply: npm 成功但 yaml 缺失时报错并提示回滚", async (
   assert.equal(r.status, "error"); // yaml 校验失败
   assert.ok(r.reason.includes("yaml"));
   assert.ok(r.hint.includes("回滚"));
+});
+
+test("backend apply: 拒绝非 semver 的目标版本，且不会执行 npm", async () => {
+  let called = false;
+  const result = await BACKEND_UPGRADER.apply({
+    server: fakeServer("0.1.0"),
+    targetVersion: "1.2.3 & whoami",
+    backupManager: { create: () => ({ id: "should-not-backup" }) },
+    execNpm: () => { called = true; return { status: 0 }; },
+  });
+  assert.equal(result.applied, false);
+  assert.equal(result.status, "error");
+  assert.match(result.reason, /版本格式非法/);
+  assert.equal(called, false);
+  assert.equal(isSafeVersion("1.2.3-beta.1+build.7"), true);
+  assert.equal(isSafeVersion("latest"), false);
+});
+
+test("backend apply: 自定义启动命令时拒绝升级全局 npm 包", async () => {
+  let called = false;
+  const server = fakeServer("0.1.0");
+  server._resolveLaunch = () => ({ argv: [process.execPath, "custom-dsh.js", "web"], source: "settings.dshCommand" });
+  const result = await BACKEND_UPGRADER.apply({
+    server,
+    execNpm: () => { called = true; return { status: 0 }; },
+  });
+  assert.equal(result.applied, false);
+  assert.match(result.reason, /自定义启动命令/);
+  assert.equal(called, false);
+});
+
+test("backend apply: npm 成功后会执行无 shell 的 DSH 依赖同步", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = require("node:fs");
+  const { join } = require("node:path");
+  const tempDir = mkdtempSync(join(require("node:os").tmpdir(), "dsh-updater-test-"));
+  const server = fakeServer("9.9.9");
+  server._binPath = join(tempDir, "lib", "bin.js");
+  server.state = "running";
+  server.restart = async () => server;
+  mkdirSync(join(tempDir, "node_modules", "yaml", "dist", "schema", "yaml-1.1"), { recursive: true });
+  writeFileSync(join(tempDir, "node_modules", "yaml", "dist", "schema", "yaml-1.1", "merge.js"), "// test\n");
+  let syncArgs = null;
+  try {
+    const result = await BACKEND_UPGRADER.apply({
+      server,
+      backupManager: { create: () => ({ id: "backup-test-003" }) },
+      execNpm: () => ({ status: 0, stdout: "", stderr: "" }),
+      execDsh: (args) => { syncArgs = args; return { status: 0, stdout: "", stderr: "" }; },
+    });
+    assert.deepEqual(syncArgs, ["plugin", "--profile", "web", "install"]);
+    assert.equal(result.resynced, true);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 });
 
 test("app check: electron-updater 不可用 -> not-configured（不抛错）", async () => {

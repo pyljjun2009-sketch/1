@@ -1,0 +1,15 @@
+feat: 安全加固（版本注入防护 + 免 shell CLI 执行）+ 构建流程改进
+
+安全加固（已完成测试）:
+- updater.js: isSafeVersion semver 校验（防版本注入）
+- updater.js: runDshCli 用后端已验证 node+CLI 路径，shell:false 免 PATH 注入
+- updater.js: BACKEND_UPGRADER 仅允许 npm global 来源升级 + execDsh 注入
+- updater.js: Profile 更新拒绝任意 targetVersion（只更新已声明 bundle）
+- ipc.js: CRASH_RESYNC 改用 runDshCli（免 shell）
+- .gitignore: 忽略 .dsh-vision-toolkit/
+
+构建流程改进:
+- build.js: 自动检测 OneDrive 目录，默认输出到系统临时目录（避免文件锁）
+- build.js: 构建前检查占用进程并提示
+
+测试: 75/75 通过
