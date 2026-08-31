@@ -140,6 +140,18 @@ function createMainWindow(server) {
   };
   server.on("status", onStatus);
 
+  // 兜底：加载页加载完成时若后端已就绪（但 status 事件可能在订阅前已发出），主动切换
+  win.webContents.on("did-finish-load", () => {
+    if (win.isDestroyed()) return;
+    if (server.state === "running" && server.url) {
+      const current = win.webContents.getURL();
+      if (!current.startsWith(server.url)) {
+        win.loadURL(server.url);
+      }
+      loadedReal = true;
+    }
+  });
+
   win.on("closed", () => {
     server.removeListener("status", onStatus);
   });
