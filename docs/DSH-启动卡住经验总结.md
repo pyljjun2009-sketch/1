@@ -40,6 +40,12 @@ DSH 桌面端启动后长期停留在"正在启动 DeepSeek Harness / 初始化�
 - **兜底**：若硬件加速导致 GPU 进程崩溃（启动即退 `-2147483645`），用 `--safe-mode` 启动或改回 `"gpuMode": "inprocess"`。
 - **权衡**：视觉工具优先选 `auto`；稳定性优先选 `inprocess`（此时视觉工具可能黑屏）。
 
+### C 类补充：桌面版启动时浏览器自动弹出 Web UI（2026-09-01）
+
+- **根因**：`dsh web` **默认自动在系统默认浏览器打开 Web UI**（`openBrowser: true`，`--open` 是默认值）。桌面版 spawn `dsh web --host --port`（未加 `--no-open`）→ 后端就绪后浏览器自动弹出。
+- **修复**：桌面版启动命令追加 **`--no-open`**（`dsh-server.js` 的 `launchCommand`），UI 已在 Electron 窗口内展示，不再弹系统浏览器。
+- **排查要点**：若桌面版启动伴随浏览器弹出 localhost 页面，优先检查 dsh web 启动参数是否含 `--no-open`，而不是怀疑 playwright/外部脚本（除非另有独立 playwright 测试进程）。
+
 ## 二点五、每次审核的标准检查清单（版本 + 完整性）
 
 以下检查应在每次版本升级、插件变更或例行审核时执行，防止 DSH 版本落后或运行库损坏导致启动失败。

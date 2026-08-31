@@ -630,7 +630,9 @@ class DshServer extends EventEmitter {
     }
     const { argv, source } = launch;
     this._launchSource = source;
-    this.launchCommand = [...argv, "--host", host, "--port", String(this.port)];
+    // --no-open：dsh web 默认会在系统默认浏览器自动打开 Web UI，
+    // 桌面版作为宿主时禁止该行为（UI 已在 Electron 窗口内展示）
+    this.launchCommand = [...argv, "--host", host, "--port", String(this.port), "--no-open"];
     this._setState("starting", { pid: null, error: null });
     this._pushLog(
       `[dsh-desktop] 启动命令: ${this.launchCommand.join(" ")} (来源: ${source}, cwd: ${this.cwd})`
