@@ -1,57 +1,85 @@
 /**
- * electron-builder 包装：构建输出目录智能选择，避免 OneDrive 同步目录被锁。
+ * electron-builder 包装：A/B 双目录交替构建，避免"运行中的 exe 占用导致 EBUSY"。
+ *
+ * 策略：
+ *   - 两个构建目录：%LOCALAPPDATA%\dsh-desktop-build-a 和 -b
+ *   - 构建前检查哪个目录的 win-unpacked exe 未被占用（或目录尚不存在），构建到空闲的那个
+ *   - 构建后记录 current.txt（当前构建目录），并更新桌面快捷方式指向最新版
+ *   - 运行中的实例在 A，构建到 B；下次运行 B（占用 B），构建回 A —— 永不冲突
  *
  * 用法：
  *   node scripts/build.js --win            # 等价 npm run dist
  *   node scripts/build.js --win portable
  *   node scripts/build.js --dir
  *
- * 输出目录选择（优先级）：
- *   1. $DSH_DESKTOP_BUILD_DIR 显式指定
- *   2. 当前目录在 OneDrive 下 -> %LOCALAPPDATA%\dsh-desktop-build（自动，推荐）
- *   3. 否则 -> dist
- *
- * 构建前会检查 win-unpacked 是否被运行中的 exe 占用，并给出提示。
+ * 可用 $DSH_DESKTOP_BUILD_DIR 显式指定单目录（跳过 A/B 逻辑）。
  */
-const { spawnSync, execSync } = require("node:child_process");
-const { existsSync } = require("node:fs");
-const { join, normalize } = require("node:path");
+const { spawnSync } = require("node:child_process");
+const { existsSync, writeFileSync, openSync, closeSync, mkdirSync } = require("node:fs");
+const { join } = require("node:path");
 const os = require("node:os");
 
-function isUnderOneDrive(dir) {
-  const d = normalize(dir).toLowerCase();
-  return d.includes("onedrive") || d.includes("\\desktop\\") || d.includes("/desktop/");
+const EXE_NAME = "DeepSeek Harness Desktop.exe";
+const BASE = join(process.env.LOCALAPPDATA || os.tmpdir(), "dsh-desktop-build");
+const BUILD_DIRS = [`${BASE}-a`, `${BASE}-b`];
+const CURRENT_FILE = join(BASE, "current.txt");
+const LNK_PATH = join(os.homedir(), "Desktop", "DeepSeek Harness Desktop.lnk");
+
+/** exe 是否被占用（尝试独占打开判断）。目录不存在视为空闲。 */
+function isExeLocked(dir) {
+  const exe = join(dir, "win-unpacked", EXE_NAME);
+  if (!existsSync(exe)) return false;
+  try {
+    const fd = openSync(exe, "r+");
+    closeSync(fd);
+    return false;
+  } catch {
+    return true;
+  }
 }
 
+/** 选择构建目录：优先未被占用的那个（A -> B）。 */
 function pickOutputDir() {
   if (process.env.DSH_DESKTOP_BUILD_DIR) return process.env.DSH_DESKTOP_BUILD_DIR;
-  const cwd = process.cwd();
-  if (isUnderOneDrive(cwd)) {
-    const auto = join(process.env.LOCALAPPDATA || os.tmpdir(), "dsh-desktop-build");
-    console.log(`[build] 检测到 OneDrive/桌面目录，输出到: ${auto}（避免文件锁）`);
-    return auto;
+
+  const lockedA = isExeLocked(BUILD_DIRS[0]);
+  const lockedB = isExeLocked(BUILD_DIRS[1]);
+
+  if (!lockedA) {
+    console.log(`[build] 目录 A 空闲，输出到: ${BUILD_DIRS[0]}`);
+    return BUILD_DIRS[0];
   }
-  return "dist";
+  if (!lockedB) {
+    console.log(`[build] 目录 A 被占用（有实例在运行），改用目录 B: ${BUILD_DIRS[1]}`);
+    return BUILD_DIRS[1];
+  }
+  console.error(
+    `[build] 两个构建目录都被运行中的实例占用（A 和 B 各有一个 DeepSeek Harness Desktop 在运行）。` +
+    `请至少关闭一个实例后重试。`
+  );
+  process.exit(1);
 }
 
-function checkLockedExe(outDir) {
-  const winUnpacked = join(outDir, "win-unpacked", "DeepSeek Harness Desktop.exe");
-  if (!existsSync(winUnpacked)) return;
+/** 构建后：记录当前目录 + 更新桌面快捷方式指向最新版。 */
+function recordAndUpdateShortcut(outDir) {
   try {
-    // 尝试以独占方式打开 exe，判断是否被占用
-    const fd = require("node:fs").openSync(winUnpacked, "r+");
-    require("node:fs").closeSync(fd);
-  } catch {
-    console.warn(
-      `\n[build] ⚠ 检测到 ${winUnpacked} 正在运行（被占用）。\n` +
-      `       构建会失败（EBUSY）。请先关闭正在运行的 DeepSeek Harness Desktop，再重新构建。\n`
-    );
-    process.exit(1);
-  }
+    mkdirSync(BASE, { recursive: true });
+    writeFileSync(CURRENT_FILE, outDir, "utf8");
+  } catch { /* 忽略 */ }
+  const exe = join(outDir, "win-unpacked", EXE_NAME);
+  if (!existsSync(exe)) return;
+  const ps = [
+    "$ws = New-Object -ComObject WScript.Shell",
+    `$lnk = $ws.CreateShortcut("${LNK_PATH.replace(/'/g, "''")}")`,
+    `$lnk.TargetPath = "${exe.replace(/'/g, "''")}"`,
+    `$lnk.WorkingDirectory = "${join(outDir, "win-unpacked").replace(/'/g, "''")}"`,
+    "$lnk.Save()",
+  ].join("; ");
+  spawnSync("powershell", ["-NoProfile", "-Command", ps], { windowsHide: true, stdio: "ignore" });
+  console.log(`[build] 桌面快捷方式已指向: ${exe}`);
 }
 
 const outDir = pickOutputDir();
-checkLockedExe(outDir);
 const args = process.argv.slice(2);
 const cli = require.resolve("electron-builder/cli.js");
 
@@ -61,4 +89,7 @@ const r = spawnSync(
   [cli, ...args, `--config.directories.output=${outDir}`],
   { stdio: "inherit", windowsHide: true }
 );
+if (r.status === 0) {
+  recordAndUpdateShortcut(outDir);
+}
 process.exit(r.status === null ? 1 : r.status);

@@ -72,14 +72,15 @@ npm run pack              # 仅解包目录（快速验证）
 ```
 
 - 输出目录自动选择（`scripts/build.js` 内置逻辑）：
-  - **OneDrive/桌面目录下自动输出到** `%LOCALAPPDATA%\dsh-desktop-build`（避免文件锁）
-  - 可用环境变量 `DSH_DESKTOP_BUILD_DIR` 显式指定覆盖：
+  - **A/B 双目录交替**：`%LOCALAPPDATA%\dsh-desktop-build-a` / `-b`——运行中的实例在 A 时构建到 B，反之亦然，**永不因 exe 占用而 EBUSY**
+  - 构建后自动更新桌面快捷方式指向最新版
+  - 可用环境变量 `DSH_DESKTOP_BUILD_DIR` 显式指定单目录覆盖：
 
   ```bash
   set DSH_DESKTOP_BUILD_DIR=D:\build\dsh-desktop&& npm run dist
   ```
 
-- 构建前会自动检查 `win-unpacked` 是否被运行中的 exe 占用（EBUSY 提前提示并退出），避免"封装应用阶段卡住"。本仓库位于 OneDrive 同步目录，偶发文件锁（`ReplaceFileW EIO`）时重试或改用非同步构建目录。
+- 两个目录都被占用（两个实例同时在跑）时会提示关闭一个。本仓库位于 OneDrive 同步目录，偶发文件锁（`ReplaceFileW EIO`）时重试。
 
 ## 配置
 
