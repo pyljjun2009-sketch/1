@@ -31,6 +31,14 @@ DSH 桌面端启动后长期停留在"正在启动 DeepSeek Harness / 初始化�
 |---|---|---|
 | GPU 进程崩溃 | 启动即退（退出码 -2147483645） | `--safe-mode`（inprocess GPU） |
 | 配置文件损坏 | 无法解析 JSON | 删除 settings.json，重建默认配置 |
+| **软件渲染下视觉工具黑屏** | DSH Web UI 中 WebGL/Canvas 视觉工具黑屏 | `settings.json` 设 `gpuMode: "auto"` 恢复硬件加速；若 GPU 崩溃再用 `--safe-mode` 兜底 |
+
+### C 类补充：视觉工具黑屏（2026-08-31）
+
+- **根因**：Windows 默认 `inprocess`（软件渲染）→ DSH Web UI 的视觉工具（依赖 WebGL/Canvas）在 SwiftShader 软件渲染下黑屏。
+- **解决**：`%APPDATA%\dsh-desktop\settings.json` 设 `"gpuMode": "auto"`（恢复硬件加速）。
+- **兜底**：若硬件加速导致 GPU 进程崩溃（启动即退 `-2147483645`），用 `--safe-mode` 启动或改回 `"gpuMode": "inprocess"`。
+- **权衡**：视觉工具优先选 `auto`；稳定性优先选 `inprocess`（此时视觉工具可能黑屏）。
 
 ## 二点五、每次审核的标准检查清单（版本 + 完整性）
 
