@@ -3,7 +3,7 @@
  */
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { UpgradeManager, BACKEND_UPGRADER, BACKEND_PACKAGE, isSafeVersion } = require("../src/main/updater.js");
+const { UpgradeManager, BACKEND_UPGRADER, BACKEND_PACKAGE, isSafeVersion, isSafePackageName } = require("../src/main/updater.js");
 
 function fakeServer(version) {
   return { version, _detectVersion: async () => version };
@@ -104,6 +104,31 @@ test("backend apply: 拒绝非 semver 的目标版本，且不会执行 npm", as
   assert.equal(called, false);
   assert.equal(isSafeVersion("1.2.3-beta.1+build.7"), true);
   assert.equal(isSafeVersion("latest"), false);
+});
+
+test("isSafePackageName: 合法 npm 包名通过", () => {
+  assert.equal(isSafePackageName("@deepseek-ai/dsh-plugin"), true);
+  assert.equal(isSafePackageName("dsh-plugin"), true);
+  assert.equal(isSafePackageName("@scope/pkg-name"), true);
+  assert.equal(isSafePackageName("@scope/pkg.name_1"), true);
+});
+
+test("isSafePackageName: 非法/注入性名称拒绝", () => {
+  assert.equal(isSafePackageName(""), false);
+  assert.equal(isSafePackageName(".."), false);
+  assert.equal(isSafePackageName("./evil"), false);
+  assert.equal(isSafePackageName("@"), false);
+  assert.equal(isSafePackageName("@/x"), false);
+  assert.equal(isSafePackageName("@scope/"), false);
+  assert.equal(isSafePackageName(".hidden"), false);
+  assert.equal(isSafePackageName("_private"), false);
+  assert.equal(isSafePackageName("pkg --flag"), false);
+  assert.equal(isSafePackageName("pkg;rm -rf /"), false);
+  assert.equal(isSafePackageName("pkg/../evil"), false);
+  assert.equal(isSafePackageName("x".repeat(300)), false);
+  assert.equal(isSafePackageName(null), false);
+  assert.equal(isSafePackageName(undefined), false);
+  assert.equal(isSafePackageName(123), false);
 });
 
 test("backend apply: 自定义启动命令时拒绝升级全局 npm 包", async () => {

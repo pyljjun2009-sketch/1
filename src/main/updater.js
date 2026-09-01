@@ -32,6 +32,31 @@ function isSafeVersion(version) {
 }
 
 /**
+ * 校验 npm 包名（bundles 声明）：只允许官方包名格式。
+ * 用于防止 profile package.json 被污染后，把恶意字符串拼进
+ * registry URL / CLI 参数（纵深防御；正常 profile 均为合法包名）。
+ * 规则：@scope/name 或 name；每段只含 [a-zA-Z0-9._-]，
+ * 且不能以 . 或 _ 开头（npm 规范），长度 ≤ 214。
+ */
+function isSafePackageName(name) {
+  if (typeof name !== "string" || name.length === 0 || name.length > 214) return false;
+  let parts;
+  if (name.startsWith("@")) {
+    const idx = name.indexOf("/");
+    if (idx <= 1 || idx === name.length - 1) return false;
+    // scope 段去掉前导 @ 后按普通名称校验（npm 规范：scope 本身是合法名称）
+    parts = [name.slice(1, idx), name.slice(idx + 1)];
+  } else {
+    parts = [name];
+  }
+  for (const part of parts) {
+    if (!/^[a-zA-Z0-9._-]+$/.test(part)) return false;
+    if (part.startsWith(".") || part.startsWith("_")) return false;
+  }
+  return true;
+}
+
+/**
  * 用后端已验证的 node + DSH CLI 路径执行子命令。
  * 不经 cmd.exe / shell，避免 PATH/命令行解释器改变参数含义。
  */
@@ -365,6 +390,10 @@ class UpgradeManager extends EventEmitter {
     for (const pkg of bundles) {
       const installed = deps[pkg];
       if (!installed) continue;
+      if (!isSafePackageName(pkg)) {
+        this._emit("backend-check", { current: null, latest: null, available: false, error: `忽略非法 bundle 名: ${pkg}` });
+        continue; // 非法包名跳过（防注入），不阻断其他合法 bundle
+      }
       try {
         const res = await fetch(
           `https://registry.npmjs.org/${pkg}/latest`,
@@ -413,8 +442,21 @@ class UpgradeManager extends EventEmitter {
         reason: "Profile 更新只允许已声明的 bundle，不接受任意目标包",
       };
     }
+    // 防注入：过滤非法包名（只更新合法 bundle，恶意/损坏声明直接跳过）
+    const safeBundles = bundles.filter((b) => isSafePackageName(b));
+    if (safeBundles.length === 0) {
+      return {
+        track: "profile",
+        status: "error",
+        applied: false,
+        reason: "没有可更新的合法 bundle（声明的包名均非法或为空）",
+      };
+    }
+    if (safeBundles.length !== bundles.length) {
+      this._emit("profile-update", { success: false, output: `已忽略 ${bundles.length - safeBundles.length} 个非法 bundle 名` });
+    }
     try {
-      const r = runDshCli(this.server, ["plugin", "--profile", "web", "update", ...bundles], { timeout: 120_000 });
+      const r = runDshCli(this.server, ["plugin", "--profile", "web", "update", ...safeBundles], { timeout: 120_000 });
       const success = r.status === 0;
       this._emit("profile-update", { success, output: r.stdout + r.stderr });
       return {
@@ -429,4 +471,4 @@ class UpgradeManager extends EventEmitter {
   }
 }
 
-module.exports = { UpgradeManager, BACKEND_UPGRADER, BACKEND_PACKAGE, isSafeVersion, runDshCli };
+module.exports = { UpgradeManager, BACKEND_UPGRADER, BACKEND_PACKAGE, isSafeVersion, isSafePackageName, runDshCli };
