@@ -397,3 +397,23 @@ test("崩溃待重启期间收到 stop()：取消自动重启，不重新拉起�
   assert.ok(!respawned, `stop 后不应自动重启，实际 state=${server.state}`);
   assert.ok(!pidAlive(oldPid));
 });
+
+test("并发 stop/start：状态一致，不产生孤儿，不覆盖新实例（回归）", async () => {
+  settings.set({ dshCommand: [process.execPath, FIXTURE] });
+  const server = new DshServer();
+  server.on("error", () => {});
+  await server.start();
+  const oldPid = server.pid;
+  // 并发触发 stop 与 start（不 await 中间态）
+  const [stopRes, startRes] = await Promise.all([server.stop(), server.start()]);
+  // stop 应成功停止旧进程；start 应完成启动（running）
+  assert.equal(stopRes.state, "stopped");
+  assert.equal(startRes.state, "running");
+  // 最终状态必须与新实例一致（不被 stop 覆盖成 stopped）
+  assert.equal(server.state, "running");
+  assert.ok(server.child && server.child.pid, "应有存活的新 child");
+  // 旧进程应被清理（无孤儿）
+  assert.ok(!pidAlive(oldPid), "旧进程应被清理");
+  await server.stop();
+  assert.equal(server.state, "stopped");
+});

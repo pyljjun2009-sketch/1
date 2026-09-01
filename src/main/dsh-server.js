@@ -615,9 +615,11 @@ class DshServer extends EventEmitter {
   }
 
   async start() {
-    // 已有进行中的启动循环，或存在存活实例时，不重复启动
+    // 已有进行中的启动循环，或存在存活实例时，不重复启动。
+    // 注意：stop() 进行中（_stopRequested=true）时不短路——
+    // 否则会返回 stop 前的过期 running 快照，调用方误以为后端已启动。
     if (this.state === "starting") return this.status();
-    if (this.state === "running" && this.child) return this.status();
+    if (this.state === "running" && this.child && !this._stopRequested) return this.status();
 
     const host = settings.get("host") || "127.0.0.1";
     const preferred = Number(settings.get("port")) || 0;
@@ -919,7 +921,10 @@ class DshServer extends EventEmitter {
       return this.status();
     }
 
-    if (this.state === "running" || this.state === "starting" || this.state === "restarting" || this.state === "error") {
+    // 只在没有新进程接管时置 stopped：
+    // stop() 期间若 start() 已 spawn 新 child（并发），不得把新实例的状态覆盖成 stopped
+    if (this.child === null &&
+        (this.state === "running" || this.state === "starting" || this.state === "restarting" || this.state === "error")) {
       this._setState("stopped");
     }
     if (killFailed) {
