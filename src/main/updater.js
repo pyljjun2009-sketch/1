@@ -297,6 +297,9 @@ class UpgradeManager extends EventEmitter {
         reason: "electron-updater 不可用或未配置发布源（升级接口已预留）",
       };
     }
+    // 每次 check 强制不自动下载：_applyApp 可能把 autoDownload 置 true，
+    // 若这里不重置，后续 check 会静默下载更新
+    autoUpdater.autoDownload = false;
     this._wireAppUpdater(autoUpdater);
     try {
       const result = await autoUpdater.checkForUpdates();
@@ -387,27 +390,39 @@ class UpgradeManager extends EventEmitter {
     }
 
     const updatable = [];
-    for (const pkg of bundles) {
+    // 并发限制为 4：bundle 多时避免串行等待（每个最多 8s 超时），
+    // 同时防止同时发起大量请求打爆 npm registry
+    const BATCH = 4;
+    const safeBundles = bundles.filter((pkg) => {
       const installed = deps[pkg];
-      if (!installed) continue;
+      if (!installed) return false;
       if (!isSafePackageName(pkg)) {
         this._emit("backend-check", { current: null, latest: null, available: false, error: `忽略非法 bundle 名: ${pkg}` });
-        continue; // 非法包名跳过（防注入），不阻断其他合法 bundle
+        return false;
       }
-      try {
-        const res = await fetch(
-          `https://registry.npmjs.org/${pkg}/latest`,
-          { signal: AbortSignal.timeout(8000) }
-        );
-        if (!res.ok) continue;
-        const meta = await res.json();
-        const latest = meta.version;
-        if (latest && latest !== installed) {
-          updatable.push({ name: pkg, current: installed, latest });
+      return true;
+    });
+    for (let i = 0; i < safeBundles.length; i += BATCH) {
+      const batch = safeBundles.slice(i, i + BATCH);
+      const results = await Promise.all(batch.map(async (pkg) => {
+        const installed = deps[pkg];
+        try {
+          const res = await fetch(
+            `https://registry.npmjs.org/${pkg}/latest`,
+            { signal: AbortSignal.timeout(8000) }
+          );
+          if (!res.ok) return null;
+          const meta = await res.json();
+          const latest = meta.version;
+          if (latest && latest !== installed) {
+            return { name: pkg, current: installed, latest };
+          }
+          return null;
+        } catch {
+          return null; // 无法访问 registry 的包跳过
         }
-      } catch {
-        // 无法访问 registry 的包跳过
-      }
+      }));
+      for (const r of results) if (r) updatable.push(r);
     }
 
     return {

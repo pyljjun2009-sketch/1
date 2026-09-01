@@ -331,7 +331,10 @@ if (!gotLock) {
       const result = await upgradeManager.check("backend");
       if (result.status !== "update-available" || !result.latest) return;
       const { dialog } = require("electron");
-      const choice = await dialog.showMessageBox(win, {
+      // win 可能为 null（keepBackendRunning 关窗后后端常开）：改用无窗口对话框，避免参数解析异常
+      const showBox = (options) =>
+        win && !win.isDestroyed() ? dialog.showMessageBox(win, options) : dialog.showMessageBox(options);
+      const choice = await showBox({
         type: "info",
         title: "发现 DSH 新版本",
         message: `DSH 官方版本更新可用：${result.current} → ${result.latest}`,
@@ -342,7 +345,7 @@ if (!gotLock) {
       });
       if (choice.response === 0) {
         const upgradeResult = await upgradeManager.apply("backend");
-        dialog.showMessageBox(win, {
+        showBox({
           type: upgradeResult.applied ? "info" : "error",
           title: "DSH 升级" + (upgradeResult.applied ? "成功" : "失败"),
           message: upgradeResult.message || upgradeResult.reason || "",

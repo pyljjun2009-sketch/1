@@ -194,6 +194,8 @@ test("app check: 假 autoUpdater 发现新版本 -> update-available", async () 
   const r = await m.check("app");
   assert.equal(r.status, "update-available");
   assert.equal(r.latest, "2.0.0");
+  // 回归：check 必须重置 autoDownload=false（apply 可能已置 true，否则后续 check 会静默下载）
+  assert.equal(fakeUpdater.autoDownload, false);
 });
 
 test("app apply: 已是最新 -> up-to-date，不下载", async () => {
