@@ -9,7 +9,7 @@ const { mkdtempSync, rmSync, existsSync, readFileSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 const net = require("node:net");
-const { DshServer, findFreePort, pidExists, listDescendants, waitPidGone } = require("../src/main/dsh-server.js");
+const { DshServer, findFreePort, pidExists, listDescendants, waitPidGone, httpUrl } = require("../src/main/dsh-server.js");
 const { settings, DEFAULTS } = require("../src/main/config.js");
 
 const FIXTURE = join(__dirname, "fixtures", "fake-dsh.js");
@@ -356,4 +356,44 @@ test("_checkProfileHealth: bundle 存在但 node_modules 缺失 → unhealthy", 
   assert.ok(result.issues[0].msg.includes("@linxin666/dsh-ssh"));
 
   rmSync(dshHome, { recursive: true, force: true });
+});
+
+test("httpUrl: IPv6 自动加方括号，IPv4/已带括号不再重复", () => {
+  assert.equal(httpUrl("127.0.0.1", 3080), "http://127.0.0.1:3080/");
+  assert.equal(httpUrl("::1", 3080), "http://[::1]:3080/");
+  assert.equal(httpUrl("[::1]", 3080), "http://[::1]:3080/");
+  assert.equal(httpUrl("0.0.0.0", 8080), "http://0.0.0.0:8080/");
+});
+
+test("_tryReuse: yaml 缺失时返回状态对象（非字符串），start 契约保持", async () => {
+  const server = new DshServer();
+  // 注入 binPath 指向一个无 yaml 的假 DSH 根
+  server._binPath = join(mkdtempSync(join(tmpdir(), "dsh-badbin-")), "lib", "bin.js");
+  const { mkdirSync } = require("node:fs");
+  mkdirSync(join(server._binPath, ".."), { recursive: true });
+  const reused = await server._tryReuse("127.0.0.1");
+  assert.ok(reused && typeof reused === "object", "应返回状态对象而非字符串");
+  assert.equal(reused.state, "error");
+  assert.ok(reused.error && reused.error.includes("yaml"), `error 应含 yaml 诊断: ${reused.error}`);
+  assert.equal(server.state, "error");
+});
+
+test("崩溃待重启期间收到 stop()：取消自动重启，不重新拉起（回归）", async () => {
+  settings.set({ dshCommand: [process.execPath, FIXTURE] });
+  const server = new DshServer();
+  server.on("error", () => {});
+  await server.start();
+  const oldPid = server.pid;
+  // 模拟崩溃并进入 restarting 待重启窗口
+  server.child.kill();
+  const restarting = await waitFor(() => server.state === "restarting", 5000);
+  assert.ok(restarting);
+  // 待重启期间调用 stop：必须取消重启且不拉起新进程
+  const st = await server.stop();
+  assert.equal(st.state, "stopped");
+  assert.equal(server._restartPending, false);
+  // 等待超过退避间隔，确认没有新进程被拉起
+  const respawned = await waitFor(() => server.state === "running" || server.state === "starting", 4000, 300);
+  assert.ok(!respawned, `stop 后不应自动重启，实际 state=${server.state}`);
+  assert.ok(!pidAlive(oldPid));
 });

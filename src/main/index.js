@@ -297,8 +297,8 @@ if (!gotLock) {
         crashRecovery.resetCrashCount();
         crashRecovery.markLastKnownGood();
         // 崩溃看门狗：记录当前 Web UI 地址 + 启动看门狗进程，
-        // 崩溃/异常关闭时自动打开系统浏览器访问 Web UI
-        if (settings.get("openBrowserOnCrash") !== false) {
+        // 崩溃/异常关闭时自动打开系统浏览器访问 Web UI（冒烟测试不启动）
+        if (settings.get("openBrowserOnCrash") !== false && process.env.DSH_DESKTOP_SMOKE !== "1") {
           try {
             fs.writeFileSync(join(app.getPath("userData"), ".dsh-web-url"), server.url, "utf8");
             const wd = spawnWatchdog({

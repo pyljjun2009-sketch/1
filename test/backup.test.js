@@ -62,6 +62,37 @@ test("restore: 恢复备份覆盖目标文件 + 自动备份", () => {
   assert.equal(bm.list().length, 2); // original + auto-backup
 });
 
+test("restore: 恢复最旧备份时不被 _cleanup 竞态删除（数据安全回归）", () => {
+  const { backupDir, dshHome } = setup();
+  const bm = new BackupManager({ backupDir, dshHome });
+  // 填满 MAX_BACKUPS（10 份），记下最旧的一份
+  const ids = [];
+  for (let i = 0; i < 10; i++) ids.push(bm.create(`bk-${i}`).id);
+  const oldestId = ids[0];
+  // 修改当前文件，然后恢复最旧备份
+  writeFileSync(join(dshHome, "profiles", "web", "package.json"), '{"changed": true}');
+  const r = bm.restore(oldestId);
+  assert.equal(r.restored, oldestId);
+  // 关键断言：restore 成功且文件确实被恢复（不再是 v2）
+  const restored = JSON.parse(readFileSync(join(dshHome, "profiles", "web", "package.json"), "utf8"));
+  assert.deepEqual(restored, { "dsh.profile.bundles": ["base"] });
+  // 恢复前自动备份应该存在（backups 保持在 10 份上限）
+  assert.equal(bm.list().length, 10);
+});
+
+test("restore: 清理 node_modules 残留（bundle 一致性回归）", () => {
+  const { backupDir, dshHome } = setup();
+  const profiles = join(dshHome, "profiles", "web");
+  // 模拟安装了插件依赖目录
+  mkdirSync(join(profiles, "node_modules", "plugin-a"), { recursive: true });
+  writeFileSync(join(profiles, "node_modules", "plugin-a", "index.js"), "// A");
+  const bm = new BackupManager({ backupDir, dshHome });
+  const m = bm.create("with-plugins");
+  // 恢复后 node_modules 不应残留（依赖重建语义）
+  bm.restore(m.id);
+  assert.ok(!existsSync(join(profiles, "node_modules")), "恢复后 node_modules 应被清理");
+});
+
 test("diff: 对比当前与备份", () => {
   const { backupDir, dshHome } = setup();
   const bm = new BackupManager({ backupDir, dshHome });
@@ -74,6 +105,21 @@ test("diff: 对比当前与备份", () => {
   const d2 = bm.diff(m.id);
   assert.ok(!d2.identical);
   assert.ok(d2.diffs["package.json"]);
+});
+
+test("diff: 全局设置 settings.yaml 变化也能被检测（回归）", () => {
+  const { backupDir, dshHome } = setup();
+  const bm = new BackupManager({ backupDir, dshHome });
+  const m = bm.create("baseline");
+  // 仅修改全局设置，profile 文件不变
+  writeFileSync(join(dshHome, "settings.yaml"), "key: changed-value");
+  const d = bm.diff(m.id);
+  assert.ok(!d.identical, "settings.yaml 变化应导致非 identical");
+  assert.ok(d.diffs[".settings.yaml"], "应报告 .settings.yaml 差异");
+  // 恢复后 settings.yaml 也应被恢复
+  bm.restore(m.id);
+  const restored = readFileSync(join(dshHome, "settings.yaml"), "utf8");
+  assert.equal(restored, "key: value");
 });
 
 test("delete: 删除备份", () => {

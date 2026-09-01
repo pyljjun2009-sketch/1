@@ -13,14 +13,13 @@
  * 存储位置：%APPDATA%/dsh-desktop/backups/<timestamp>/
  * 保留策略：最近 10 份，超出自动清理最旧。
  */
-const { join, basename, dirname, relative } = require("node:path");
+const { join, dirname } = require("node:path");
 const { homedir } = require("node:os");
 const {
   existsSync, mkdirSync, readdirSync, statSync, readFileSync,
-  writeFileSync, copyFileSync, rmSync, createWriteStream,
+  writeFileSync, rmSync,
 } = require("node:fs");
 const { createHash } = require("node:crypto");
-const { pipeline } = require("node:stream/promises");
 const { EventEmitter } = require("node:events");
 
 const MAX_BACKUPS = 10;
@@ -154,36 +153,58 @@ class BackupManager extends EventEmitter {
     const srcDir = join(this.backupDir, id);
     if (!existsSync(srcDir)) throw new Error(`备份 ${id} 不存在`);
 
-    // 恢复前自动备份
+    // 先把源备份内容完整读入内存——因为下面的 create() 会触发 _cleanup()，
+    // 当备份数达到上限且恢复的是最旧备份时，源目录可能被清理删除。
+    // 先快照可避免"源备份被删 + restore 静默失败"的数据丢失竞态。
+    const snapshot = this._readBackupSnapshot(srcDir);
+
+    // 恢复前自动备份（_cleanup 可能在此删除最旧备份，包括 srcDir；但内容已在 snapshot 中）
     const beforeManifest = this.create(`恢复前自动备份（恢复目标: ${id}）`);
 
     // 确保目标目录存在
     mkdirSync(this.profilesDir, { recursive: true });
 
-    // 停机：删除当前 profiles-web 中的所有受管文件（恢复前清空）
-    const { readdirSync, unlinkSync } = require("node:fs");
+    // 停机：删除当前 profiles/web 中的所有内容（含 node_modules，避免恢复后
+    // bundle 声明与已安装插件不一致；备份不含 node_modules，恢复语义=关键文件回滚 + 依赖重建）
+    const { rmSync } = require("node:fs");
     if (existsSync(this.profilesDir)) {
       for (const f of readdirSync(this.profilesDir)) {
-        try { unlinkSync(join(this.profilesDir, f)); } catch { /* 忽略 */ }
+        try { rmSync(join(this.profilesDir, f), { recursive: true, force: true }); } catch { /* 忽略 */ }
       }
     }
 
-    // 恢复 profiles-web 文件
-    const profilesDir = join(srcDir, "profiles-web");
-    if (existsSync(profilesDir)) {
-      for (const f of readdirSync(profilesDir)) {
-        copyFileSync(join(profilesDir, f), join(this.profilesDir, f));
-      }
+    // 从内存快照恢复 profiles-web 文件（不依赖可能已被清理的 srcDir）
+    for (const [relPath, content] of Object.entries(snapshot.profilesWeb)) {
+      mkdirSync(dirname(join(this.profilesDir, relPath)), { recursive: true });
+      writeFileSync(join(this.profilesDir, relPath), content, "utf8");
     }
 
     // 恢复全局设置
-    const settingsSrc = join(srcDir, ".settings.yaml");
-    if (existsSync(settingsSrc)) {
-      copyFileSync(settingsSrc, join(this.dshHome, "settings.yaml"));
+    if (snapshot.settingsYaml !== null) {
+      writeFileSync(join(this.dshHome, "settings.yaml"), snapshot.settingsYaml, "utf8");
     }
 
     this.emit("restored", { id, beforeBackupId: beforeManifest.id });
     return { restored: id, beforeBackupId: beforeManifest.id };
+  }
+
+  /** 读取备份目录内容到内存（restore 前调用，防 _cleanup 竞态）。 */
+  _readBackupSnapshot(srcDir) {
+    const snap = { profilesWeb: {}, settingsYaml: null };
+    const profilesDir = join(srcDir, "profiles-web");
+    if (existsSync(profilesDir)) {
+      for (const f of readdirSync(profilesDir)) {
+        const p = join(profilesDir, f);
+        try {
+          if (statSync(p).isFile()) snap.profilesWeb[f] = readFileSync(p, "utf8");
+        } catch { /* 忽略单个文件读取失败 */ }
+      }
+    }
+    const settingsSrc = join(srcDir, ".settings.yaml");
+    if (existsSync(settingsSrc)) {
+      try { snap.settingsYaml = readFileSync(settingsSrc, "utf8"); } catch { /* 忽略 */ }
+    }
+    return snap;
   }
 
   /** 对比当前与指定备份的差异。 */
@@ -195,13 +216,20 @@ class BackupManager extends EventEmitter {
     const manifest = JSON.parse(readFileSync(join(srcDir, "manifest.json"), "utf8"));
     const current = this._snapshot();
     const diffs = {};
-    for (const f of this._keyFiles()) {
-      const backupContent = existsSync(join(srcDir, "profiles-web", f))
-        ? readFileSync(join(srcDir, "profiles-web", f), "utf8")
-        : null;
-      const currentContent = current[f] || null;
+    // 对比范围 = 备份 manifest 记录的全部文件（含 .settings.yaml 全局设置），
+    // 兜底为关键文件列表（老备份无 manifest 时）
+    const files = Array.isArray(manifest?.files) && manifest.files.length > 0
+      ? manifest.files
+      : this._keyFiles();
+    for (const rel of files) {
+      // 备份内路径：profiles-web/<file>，或根目录的 .settings.yaml
+      const backupPath = rel.startsWith(".")
+        ? join(srcDir, rel)
+        : join(srcDir, "profiles-web", rel);
+      const backupContent = existsSync(backupPath) ? readFileSync(backupPath, "utf8") : null;
+      const currentContent = current[rel] || null;
       if (backupContent !== currentContent) {
-        diffs[f] = {
+        diffs[rel] = {
           changed: true,
           backupHash: backupContent ? this._hash(backupContent) : null,
           currentHash: currentContent ? this._hash(currentContent) : null,

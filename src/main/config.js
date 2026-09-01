@@ -46,12 +46,15 @@ const DEFAULTS = Object.freeze({
   openBrowserOnCrash: true,
 });
 
+/** 监听地址格式校验：仅允许 IPv4 / IPv6 / localhost / 主机名（无空白、无斜杠、无额外参数）。 */
+const HOST_RE = /^[a-zA-Z0-9.\-:\[\]]+$/;
+
 /** 单字段校验器：返回 true 表示合法。 */
 const VALIDATORS = {
   dshCommand: (v) =>
     v === null || (Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === "string")),
   nodeBin: (v) => v === null || (typeof v === "string" && v.trim().length > 0),
-  host: (v) => typeof v === "string" && v.trim().length > 0,
+  host: (v) => typeof v === "string" && v.trim().length > 0 && HOST_RE.test(v.trim()),
   port: (v) => Number.isInteger(v) && v >= 0 && v <= 65535,
   workingDirectory: (v) => v === null || (typeof v === "string" && v.trim().length > 0),
   gpuMode: (v) => v === null || ["auto", "off", "inprocess"].includes(v),

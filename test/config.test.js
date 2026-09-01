@@ -60,6 +60,13 @@ test("set: 非法 dshCommand / nodeBin / host / 布尔 拒绝", () => {
   assert.throws(() => s.set({ nodeBin: "" }), /nodeBin/);
   assert.throws(() => s.set({ host: 123 }), /host/);
   assert.throws(() => s.set({ host: "" }), /host/);
+  assert.throws(() => s.set({ host: "127.0.0.1 --evil" }), /host/); // 含空白 → 拒绝（防 CLI 参数注入）
+  assert.throws(() => s.set({ host: "127.0.0.1/../" }), /host/); // 含斜杠 → 拒绝
+  assert.throws(() => s.set({ host: "localhost:8080/path" }), /host/);
+  s.set({ host: "0.0.0.0" }); // 合法 IPv4
+  s.set({ host: "::1" }); // 合法 IPv6
+  s.set({ host: "[::1]" }); // 带方括号 IPv6
+  s.set({ host: "my-host.local" }); // 合法主机名
   assert.throws(() => s.set({ launchAtLogin: "yes" }), /launchAtLogin/);
   assert.throws(() => s.set({ workingDirectory: "" }), /workingDirectory/);
   // 合法值

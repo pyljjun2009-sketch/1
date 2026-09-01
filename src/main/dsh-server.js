@@ -28,24 +28,40 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** 找一个空闲端口：优先使用首选端口，否则由 OS 分配。 */
+/** 构造 http URL（IPv6 需方括号）。 */
+function httpUrl(host, port) {
+  const hostDisplay = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  return `http://${hostDisplay}:${port}/`;
+}
+
+/** 找一个空闲端口：优先使用首选端口，否则由 OS 分配。整体加 10s 超时兜底。 */
 function findFreePort(preferred, host) {
   return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      try { srv.close(); } catch { /* 忽略 */ }
+      try { srv2.close(); } catch { /* 忽略 */ }
+      reject(new Error("端口分配超时"));
+    }, 10_000);
+    const done = (err, port) => {
+      clearTimeout(timer);
+      if (err) reject(err);
+      else resolve(port);
+    };
     const srv = net.createServer();
     srv.unref();
     srv.on("error", () => {
       // 首选端口被占用：让 OS 分配
       const srv2 = net.createServer();
       srv2.unref();
-      srv2.on("error", reject);
+      srv2.on("error", (e) => done(e));
       srv2.listen(0, host, () => {
         const p = srv2.address().port;
-        srv2.close(() => resolve(p));
+        srv2.close(() => done(null, p));
       });
     });
     srv.listen(preferred, host, () => {
       const p = srv.address().port;
-      srv.close(() => resolve(p));
+      srv.close(() => done(null, p));
     });
   });
 }
@@ -58,11 +74,14 @@ function pidExists(pid) {
       const r = spawnSync("tasklist", ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"], {
         windowsHide: true,
         encoding: "utf8",
-        timeout: 10_000,
+        timeout: 3_000, // tasklist 正常 <500ms；缩短超时减少 stop() 期间阻塞
       });
+      // 超时/命令失败（status===null）无法确认进程状态：保守假设存活，
+      // 避免 waitPidGone/stop() 误判"已退出"导致假成功
+      if (r.status === null) return true;
       return r.status === 0 && r.stdout.includes(`"${pid}"`);
     } catch {
-      return false;
+      return true; // 查询失败时保守假设存活
     }
   }
   try {
@@ -101,10 +120,12 @@ function listDescendants(rootPid) {
 
 /** 读取进程表 [pid, ppid] 列表（wmic 优先，失败用 PowerShell 兜底）。 */
 function readProcessTable() {
+  // 同步调用会阻塞主进程：wmic 正常 <1s，超时从 15s 缩短到 5s，
+  // 兜底 powershell 从 20s 缩短到 8s，尽量缩短 UI 冻结窗口
   const wmic = spawnSync(
     "wmic",
     ["process", "get", "ProcessId,ParentProcessId", "/FORMAT:CSV"],
-    { windowsHide: true, encoding: "utf8", timeout: 15_000 }
+    { windowsHide: true, encoding: "utf8", timeout: 5_000 }
   );
   if (wmic.status === 0 && wmic.stdout) {
     const rows = [];
@@ -126,7 +147,7 @@ function readProcessTable() {
         "-Command",
         "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId | ConvertTo-Json -Compress",
       ],
-      { windowsHide: true, encoding: "utf8", timeout: 20_000 }
+      { windowsHide: true, encoding: "utf8", timeout: 8_000 }
     );
     if (ps.status === 0 && ps.stdout) {
       const rows = [];
@@ -342,6 +363,8 @@ class DshServer extends EventEmitter {
   async _probeUrl(url, timeoutMs = 3000) {
     try {
       const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+      // 消费响应体，释放连接（避免 keep-alive 连接泄漏）
+      await res.arrayBuffer().catch(() => {});
       return res.status < 500;
     } catch {
       return false;
@@ -351,7 +374,7 @@ class DshServer extends EventEmitter {
   /** 启动前检测端口占用：若已有 dsh web 实例运行在常用端口，输出警告。 */
   async _warnPortOccupied(host) {
     for (const probePort of [3080, 8080]) {
-      const probeUrl = `http://${host}:${probePort}/`;
+      const probeUrl = httpUrl(host, probePort);
       if (await this._probeUrl(probeUrl)) {
         this._pushLog(
           `[dsh-desktop] ⚠ 检测到端口 ${probePort} 已有服务运行（可能是外部启动的 dsh web）：${probeUrl}。如需复用，在 settings.json 设置 port:${probePort}；如需独立，在 settings.json 设置 port:0`
@@ -368,7 +391,7 @@ class DshServer extends EventEmitter {
   async _tryReuse(host) {
     const candidates = [Number(settings.get("port")) || 3080, 3080];
     for (const probePort of [...new Set(candidates)]) {
-      const probeUrl = `http://${host}:${probePort}/`;
+      const probeUrl = httpUrl(host, probePort);
       try {
         const res = await fetch(probeUrl, { signal: AbortSignal.timeout(5000) });
         if (res.status < 400) {
@@ -398,11 +421,16 @@ class DshServer extends EventEmitter {
       if (!existsSync(yamlMerge)) {
         let installedVersion = "unknown";
         try { installedVersion = JSON.parse(readFileSync(join(dshRoot, "package.json"), "utf8")).version; } catch { /* 忽略 */ }
-        return (
+        const msg = (
           `DSH 全局运行库文件损坏：yaml schema 模块缺失（${yamlMerge}）。` +
           `当前版本: ${installedVersion}。请运行 "npm install -g @deepseek-ai/dsh@${installedVersion}" 同版本重装。` +
           `⚠ 不要删除 ~/.dsh 目录（含插件配置和凭据），仅重装全局 DSH 即可。`
         );
+        // 统一返回状态对象（与正常复用路径一致），避免 start() 把字符串当状态返回
+        this._pushLog(`[dsh-desktop] ${msg}`);
+        this._setState("error", { error: msg });
+        this._emitError(this.status());
+        return this.status();
       }
     }
     return null;
@@ -597,8 +625,8 @@ class DshServer extends EventEmitter {
     this.error = null;
     this.lastExit = null;
 
-    // 安全拦截：非 localhost 地址需要明确授权
-    const LOCALHOST_RE = /^(127\.\d+\.\d+\.\d+|::1|localhost)$/i;
+    // 安全拦截：非 localhost 地址需要明确授权（支持带/不带方括号的 IPv6）
+    const LOCALHOST_RE = /^(127\.\d+\.\d+\.\d+|::1|\[::1\]|localhost)$/i;
     if (!LOCALHOST_RE.test(host) && !settings.get("allowNetworkAccess")) {
       const msg = `安全限制：监听地址 "${host}" 不是 localhost。若需局域网访问，请在 settings.json 中设置 allowNetworkAccess: true（注意：这会暴露 DSH Web 到局域网）。`;
       this._pushLog(`[dsh-desktop] ${msg}`);
@@ -616,10 +644,18 @@ class DshServer extends EventEmitter {
       if (reused) return reused;
     }
 
-    this.port = await findFreePort(preferred, host);
-    // IPv6 地址需要方括号（http://[::1]:3080/）
-    const hostDisplay = host.includes(":") ? `[${host}]` : host;
-    this.url = `http://${hostDisplay}:${this.port}/`;
+    let port;
+    try {
+      port = await findFreePort(preferred, host);
+    } catch (err) {
+      const msg = `端口分配失败：${err.message}`;
+      this._pushLog(`[dsh-desktop] ${msg}`);
+      this._setState("error", { error: msg });
+      this._emitError(this.status());
+      return this.status();
+    }
+    this.port = port;
+    this.url = httpUrl(host, port);
     this.cwd = this._resolveWorkingDir();
 
     const launch = this._resolveLaunch();
@@ -656,6 +692,8 @@ class DshServer extends EventEmitter {
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
         shell: false, // 始终不用 shell：避免 cmd.exe/powershell.exe 包装进程
+        // 非 Windows：独立进程组，stop() 时用负 PID 杀整棵树（含孙进程）
+        detached: process.platform !== "win32",
       });
     } catch (err) {
       this._setState("error", {
@@ -671,6 +709,18 @@ class DshServer extends EventEmitter {
 
     this.pid = this.child.pid;
     const spawned = this.child; // 绑定当前子进程，防止迟到事件误伤重启后的新进程
+    // 补发一次 status：UI 在 starting 阶段能看到真实 pid
+    this.emit("status", this.status());
+
+    // stop() 可能在 spawn 前置段（端口探测/复用检查）期间被调用：
+    // 此时 _stopRequested 已置位但 spawn 已发生，必须立即终止并返回 stopped
+    if (this._stopRequested) {
+      this._killChild();
+      this._setState("stopped");
+      this._pushLog("[dsh-desktop] spawn 后收到停止请求，已终止新进程");
+      return this.status();
+    }
+
     this.child.stdout.on("data", (d) => this._pushLog(d));
     this.child.stderr.on("data", (d) => this._pushLog(d));
     this.child.on("error", (err) => {
@@ -739,9 +789,16 @@ class DshServer extends EventEmitter {
       await sleep(500);
     }
 
-    // 若等待期间子进程已退出并请求过重启，则在此续跑（此时不报超时）
+    // 若等待期间子进程已退出并请求过重启，则在此续跑（此时不报超时）。
+    // 但必须先检查 _stopRequested：用户在崩溃等待窗口点了停止时，续跑会
+    // 重新拉起后端（start() 入口又会清掉停止标志）——必须尊重停止意图。
     if (this._restartPending) {
       this._restartPending = false;
+      if (this._stopRequested) {
+        this._setState("stopped");
+        this._pushLog("[dsh-desktop] 崩溃待重启期间收到停止请求，取消自动重启");
+        return this.status();
+      }
       this.state = "stopped"; // 复位状态，允许 start() 重新进入
       return this.start();
     }
@@ -783,9 +840,11 @@ class DshServer extends EventEmitter {
     const child = this.child;
     if (!child || !child.pid) return;
     if (process.platform === "win32") {
-      try { spawnSync("taskkill", ["/pid", String(child.pid), "/F"], { windowsHide: true, stdio: "ignore" }); } catch { /* 忽略 */ }
+      // /T 杀整棵进程树（与 stop() 一致），防止启动超时后残留 detached 孙进程
+      try { spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" }); } catch { /* 忽略 */ }
     } else {
-      try { child.kill("SIGTERM"); } catch { /* 忽略 */ }
+      // 非 Windows：杀进程组（spawn 时 detached）
+      try { process.kill(-child.pid, "SIGTERM"); } catch { /* 忽略 */ }
     }
     this.child = null;
     this.pid = null;
@@ -822,13 +881,10 @@ class DshServer extends EventEmitter {
           }
         }
       } else {
-        child.kill("SIGTERM");
+        // 非 Windows：子进程已 detached 成独立进程组，负 PID 杀整棵树
+        try { process.kill(-child.pid, "SIGTERM"); } catch { /* 已退出 */ }
         setTimeout(() => {
-          try {
-            child.kill("SIGKILL");
-          } catch {
-            /* 已退出 */
-          }
+          try { process.kill(-child.pid, "SIGKILL"); } catch { /* 已退出 */ }
         }, 3000);
       }
     }
@@ -837,8 +893,14 @@ class DshServer extends EventEmitter {
     const mainGone = rootPid ? await waitPidGone(rootPid, 5000) : true;
     const leftovers = rootPid && mainGone ? this._listDescendants(rootPid).filter((p) => this._pidExists(p)) : [];
 
-    this.child = null;
-    this.pid = null;
+    // 只在 child 仍是我们停止的那个进程时清引用——
+    // 若 stop() 期间 start() 已 spawn 新进程，不得抹掉新 child（否则变孤儿且无法停止）
+    if (this.child === child) {
+      this.child = null;
+    }
+    if (this.pid === rootPid) {
+      this.pid = null;
+    }
 
     if (rootPid && (!mainGone || leftovers.length > 0)) {
       const detail =
@@ -878,4 +940,4 @@ class DshServer extends EventEmitter {
   }
 }
 
-module.exports = { DshServer, findFreePort, pidExists, listDescendants, waitPidGone, RESTART_BACKOFF_SECONDS };
+module.exports = { DshServer, findFreePort, pidExists, listDescendants, waitPidGone, httpUrl, RESTART_BACKOFF_SECONDS };
