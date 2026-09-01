@@ -23,7 +23,7 @@ const EXE_NAME = "DeepSeek Harness Desktop.exe";
 const BASE = join(process.env.LOCALAPPDATA || os.tmpdir(), "dsh-desktop-build");
 const BUILD_DIRS = [`${BASE}-a`, `${BASE}-b`];
 const CURRENT_FILE = join(BASE, "current.txt");
-const LNK_PATH = join(os.homedir(), "Desktop", "DeepSeek Harness Desktop.lnk");
+const LNK_NAME = "DeepSeek Harness Desktop.lnk";
 
 /** exe 是否被占用（尝试独占打开判断）。目录不存在视为空闲。 */
 function isExeLocked(dir) {
@@ -68,9 +68,12 @@ function recordAndUpdateShortcut(outDir) {
   } catch { /* 忽略 */ }
   const exe = join(outDir, "win-unpacked", EXE_NAME);
   if (!existsSync(exe)) return;
+  // Windows 的“桌面”可能被 OneDrive 重定向，不能假定它是 %USERPROFILE%\\Desktop。
+  // 使用系统已知文件夹，确保构建后真正更新用户双击的快捷方式。
   const ps = [
     "$ws = New-Object -ComObject WScript.Shell",
-    `$lnk = $ws.CreateShortcut("${LNK_PATH.replace(/'/g, "''")}")`,
+    "$desktop = [Environment]::GetFolderPath('Desktop')",
+    `$lnk = $ws.CreateShortcut((Join-Path $desktop '${LNK_NAME}'))`,
     `$lnk.TargetPath = "${exe.replace(/'/g, "''")}"`,
     `$lnk.WorkingDirectory = "${join(outDir, "win-unpacked").replace(/'/g, "''")}"`,
     "$lnk.Save()",

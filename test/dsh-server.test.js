@@ -101,6 +101,7 @@ test("start: 假后端就绪（running），状态含 url/pid/cwd/launchCommand"
   assert.ok(Number.isInteger(st.pid));
   assert.ok(st.cwd && existsSync(st.cwd));
   assert.ok(Array.isArray(st.launchCommand) && st.launchCommand.includes("--port"));
+  assert.ok(st.launchCommand.includes("--no-open"), "桌面端不应额外打开系统浏览器的 WebUI");
   await server.stop();
 });
 

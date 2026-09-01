@@ -15,6 +15,11 @@ function isServerOrigin(url, serverUrl) {
   }
 }
 
+/** 仅当真实 DSH 页面已加载时才显示首次创建的窗口。 */
+function shouldShowServerWindow(server, currentUrl) {
+  return Boolean(server?.state === "running" && server?.url && isServerOrigin(currentUrl, server.url));
+}
+
 /** DSH Web 与设置页均不需要直接申请操作系统权限，默认一律拒绝。 */
 function denyPermissions(webContents) {
   const session = webContents?.session;
@@ -119,11 +124,17 @@ function createMainWindow(server) {
   });
   win.webContents.on("will-attach-webview", (event) => event.preventDefault());
 
-  win.once("ready-to-show", () => win.show());
-
-  // 先加载本地加载页，后端就绪后切换到真实 UI
+  // 先在隐藏窗口中加载本地错误/恢复页。正常启动时，直到真实 DSH UI 已就绪才显示窗口，
+  // 避免用户看到启动日志和加载动画；若启动失败，仍展示该页以提供诊断与重试入口。
   win.loadFile(join(__dirname, "..", "..", "assets", "loading.html"));
   let loadedReal = false;
+
+  const showIfServerPageLoaded = () => {
+    if (win.isDestroyed() || !shouldShowServerWindow(server, win.webContents.getURL())) return false;
+    loadedReal = true;
+    if (!win.isVisible()) win.show();
+    return true;
+  };
 
   const onStatus = (s) => {
     if (win.isDestroyed()) return;
@@ -131,8 +142,9 @@ function createMainWindow(server) {
       const current = win.webContents.getURL();
       if (!current.startsWith(s.url)) {
         win.loadURL(s.url);
+      } else {
+        showIfServerPageLoaded();
       }
-      loadedReal = true;
     } else if ((s.state === "starting" || s.state === "restarting" || s.state === "error") && loadedReal) {
       // 后端重启/出错时回到加载页，避免停留在失效页面
       win.loadFile(join(__dirname, "..", "..", "assets", "loading.html"));
@@ -147,8 +159,12 @@ function createMainWindow(server) {
       const current = win.webContents.getURL();
       if (!current.startsWith(server.url)) {
         win.loadURL(server.url);
+        return;
       }
-      loadedReal = true;
+      showIfServerPageLoaded();
+    } else if (server.state === "error" && !win.isVisible()) {
+      // 正常启动时不显示等待页；只有启动失败才显示诊断和重试按钮。
+      win.show();
     }
   });
 
@@ -163,4 +179,4 @@ function createMainWindow(server) {
   return win;
 }
 
-module.exports = { createMainWindow, buildMenu, denyPermissions };
+module.exports = { createMainWindow, buildMenu, denyPermissions, isServerOrigin, shouldShowServerWindow };

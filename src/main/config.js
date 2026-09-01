@@ -5,7 +5,7 @@
  *
  * 字段说明：
  *  - dshCommand:  string[] | null   完全自定义的 dsh web 启动命令 argv，
- *                                   （不含 --host/--port，由主进程追加）。
+ *                                   （不含 --host/--port/--no-open，由主进程追加）。
  *                                   例如 ["C:\\node.exe", "C:\\...\\@deepseek-ai\\dsh\\lib\\bin.js", "web"]
  *                                   ⚠ 仅可在配置文件中手动设置，IPC 拒绝修改（防止渲染进程注入任意命令）。
  *  - nodeBin:     string | null     运行 dsh 所用的 node 可执行文件，null 时自动探测。
