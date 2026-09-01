@@ -158,6 +158,7 @@
       byId("cfg-host").value = cfg.host ?? "127.0.0.1";
       byId("cfg-keepRunning").checked = Boolean(cfg.keepBackendRunning);
       byId("cfg-reuseDsh").checked = Boolean(cfg.reuseExistingDsh);
+      byId("cfg-openBrowserOnCrash").checked = cfg.openBrowserOnCrash !== false;
     } catch (err) {
       byId("config-status").textContent = `加载失败：${errorMessage(err)}`;
     }
@@ -172,6 +173,7 @@
       host: byId("cfg-host").value.trim() || "127.0.0.1",
       keepBackendRunning: byId("cfg-keepRunning").checked,
       reuseExistingDsh: byId("cfg-reuseDsh").checked,
+      openBrowserOnCrash: byId("cfg-openBrowserOnCrash").checked,
     };
     try {
       await dsh.setConfig(patch);

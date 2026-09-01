@@ -27,7 +27,7 @@ const list = listArr.join("\n"); // 转为字符串以便 includes 查找
 
 const required = [
   "index.js", "dsh-server.js", "config.js", "ipc.js", "window.js",
-  "updater.js", "backup.js", "crash-recovery.js",
+  "updater.js", "backup.js", "crash-recovery.js", "watchdog.js",
   "preload.js", "preload-settings.js", "channels.js",
   "loading.html", "loading.js", "settings.html", "settings.js", "icon.png", "package.json",
 ];

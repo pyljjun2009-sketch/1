@@ -23,6 +23,8 @@
  *  - launchAtLogin: boolean         开机自启。
  *  - openDevTools: boolean          启动后自动打开开发者工具。
  *  - autoRestartOnCrash: boolean    后端进程异常退出后自动重启（最多 3 次，指数退避）。
+ *  - openBrowserOnCrash: boolean    桌面程序崩溃/非正常关闭后，自动打开系统浏览器访问 Web UI
+ *                                   （由看门狗进程监控；taskkill /T 全树强杀场景不保证）。
  *
  * 校验规则见 VALIDATORS：非法值写入会被拒绝（set 抛错），配置文件里的非法值
  * 在加载时自动回退默认值并记录警告。
@@ -41,6 +43,7 @@ const DEFAULTS = Object.freeze({
   launchAtLogin: false,
   openDevTools: false,
   autoRestartOnCrash: true,
+  openBrowserOnCrash: true,
 });
 
 /** 单字段校验器：返回 true 表示合法。 */
@@ -59,6 +62,7 @@ const VALIDATORS = {
   launchAtLogin: (v) => typeof v === "boolean",
   openDevTools: (v) => typeof v === "boolean",
   autoRestartOnCrash: (v) => typeof v === "boolean",
+  openBrowserOnCrash: (v) => typeof v === "boolean",
 };
 
 const FIELD_LABELS = {
@@ -75,6 +79,7 @@ const FIELD_LABELS = {
   launchAtLogin: "布尔值",
   openDevTools: "布尔值",
   autoRestartOnCrash: "布尔值",
+  openBrowserOnCrash: "布尔值（崩溃/异常关闭后自动打开浏览器访问 Web UI）",
 };
 
 function validateField(key, value) {

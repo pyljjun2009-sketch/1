@@ -31,6 +31,7 @@ const { UpgradeManager } = require("./updater.js");
 const { registerIpc } = require("./ipc.js");
 const { BackupManager } = require("./backup.js");
 const { CrashRecovery } = require("./crash-recovery.js");
+const { spawnWatchdog } = require("./watchdog.js");
 
 const SMOKE_READY_TIMEOUT_MS = 30_000;
 const SMOKE_PAGE_TIMEOUT_MS = 60_000;
@@ -295,6 +296,20 @@ if (!gotLock) {
       if (server.state === "running" && crashRecovery) {
         crashRecovery.resetCrashCount();
         crashRecovery.markLastKnownGood();
+        // 崩溃看门狗：记录当前 Web UI 地址 + 启动看门狗进程，
+        // 崩溃/异常关闭时自动打开系统浏览器访问 Web UI
+        if (settings.get("openBrowserOnCrash") !== false) {
+          try {
+            fs.writeFileSync(join(app.getPath("userData"), ".dsh-web-url"), server.url, "utf8");
+            const wd = spawnWatchdog({
+              userDataDir: app.getPath("userData"),
+              nodeBin: settings.get("nodeBin") || process.env.DSH_DESKTOP_NODE || "node",
+            });
+            dbg(`watchdog spawned: ${JSON.stringify(wd)}`);
+          } catch (err) {
+            console.error("[dsh-desktop] 看门狗启动失败:", err.message);
+          }
+        }
       } else if (server.state === "error" && crashRecovery) {
         const count = crashRecovery.incrementCrashCount();
         dbg(`crash count: ${count}`);

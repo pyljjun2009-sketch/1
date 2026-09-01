@@ -100,6 +100,7 @@ npm run pack              # 仅解包目录（快速验证）
 | `launchAtLogin` | boolean | `false` | 开机自启 |
 | `openDevTools` | boolean | `false` | 启动后自动打开开发者工具 |
 | `autoRestartOnCrash` | boolean | `true` | 后端异常退出自动重启（指数退避，最多 3 次） |
+| `openBrowserOnCrash` | boolean | `true` | 桌面程序崩溃/非正常关闭后，自动打开系统浏览器访问 Web UI（由看门狗进程监控；`taskkill /T` 全树强杀场景不保证） |
 | `reuseExistingDsh` | boolean | `false` | 复用已有 DSH 实例（验证 DeepSeek 标记后直接挂接，不重新启动） |
 | `allowNetworkAccess` | boolean | `false` | 允许监听非 localhost 地址（⚠ 会暴露 DSH Web 到局域网，需显式开启） |
 
@@ -119,6 +120,16 @@ npm run pack              # 仅解包目录（快速验证）
 - 默认（`keepBackendRunning:false`）：关闭窗口 → 退出应用 → `before-quit` 中确认式停止后端（taskkill /T + 主 PID 消失轮询 + 后代枚举），退出后零残留。
 - 常开（`keepBackendRunning:true`）：关窗仅关 UI，后端保持运行；再次启动应用实例唤回窗口。设计决策见 `docs/adr/ADR-002-backend-ui-lifecycle.md`。
 
+## 崩溃自动恢复（打开浏览器访问 Web UI）
+
+- **原理**：Electron 主进程崩溃后自身无法自救，因此应用启动成功后会在后台拉起一个**独立看门狗进程**（`src/main/watchdog.js`，由 node 运行，`detached` 不随主进程退出）。
+- **行为**：看门狗轮询主进程 PID——主进程消失后检查退出标记 `.last-clean-exit`：
+  - 存在 → 用户主动正常关闭，看门狗静默退出（不会打开浏览器）；
+  - 不存在 → 判定崩溃/非正常关闭，读取 `.dsh-web-url`（启动时写入的 Web UI 地址），探测后端可达后调用系统默认浏览器打开 Web UI。
+- **开关**：设置面板"通用设置 → 崩溃/异常关闭后自动打开浏览器访问 Web UI"，对应配置 `openBrowserOnCrash`（默认 `true`）。
+- **日志**：看门狗运行日志在 `%APPDATA%/dsh-desktop/watchdog.log`。
+- **已知限制**：`taskkill /T /F` 全树强杀会把看门狗一并杀掉（Windows PPID 链行为），该场景无法保证自动打开浏览器；崩溃后后端若已被一起终止，探测失败则不打开。
+
 ## 目录结构
 
 ```
@@ -132,7 +143,8 @@ D:\AI\DSH/
 │  │  ├─ ipc.js        # IPC 接线（依赖可注入；受限字段防护）
 │  │  ├─ updater.js    # 升级接口（三轨道：app/backend/profile）
 │  │  ├─ backup.js     # 数据备份管理器
-│  │  └─ crash-recovery.js # 崩溃恢复管理器
+│  │  ├─ crash-recovery.js # 崩溃恢复管理器
+│  │  └─ watchdog.js   # 崩溃看门狗（独立进程：异常退出自动打开浏览器访问 Web UI）
 │  ├─ preload/
 │  │  ├─ preload.js        # 最小权限桥接（DSH 页面/加载页用）
 │  │  └─ preload-settings.js  # 完整管理权限桥接（设置页专用）
