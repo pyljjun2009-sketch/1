@@ -46,6 +46,7 @@ function makeFakeWindow() {
 let ipc;
 let win;
 let calls;
+let fakeBackup;
 
 beforeEach(() => {
   ipc = makeFakeIpc();
@@ -70,7 +71,7 @@ beforeEach(() => {
   };
   const fakeShell = { openExternal: async () => {} };
   const dir = mkdtempSync(join(tmpdir(), "dsh-ipc-"));
-  const fakeBackup = {
+  fakeBackup = {
     create: (note) => ({ id: "backup-id", note }),
     list: () => [],
     restore: (id) => ({ restored: id }),
@@ -183,4 +184,23 @@ test("UPGRADE_CHECK/APPLY 转发到 UpgradeManager", async () => {
 
 test("事件推送: sink 已注册", () => {
   assert.equal(typeof calls.sink, "function");
+});
+
+test("CRASH_RESET: 备份失败时不执行重置（数据安全回归）", async () => {
+  // 让备份 create 抛错（模拟磁盘满），profile 不应被删除
+  const origCreate = fakeBackup.create;
+  fakeBackup.create = () => { throw new Error("磁盘满"); };
+  try {
+    const result = await ipc.invoke(CH.CRASH_RESET);
+    assert.equal(result.reset, false);
+    assert.ok(result.error && result.error.includes("备份失败"), `error=${result.error}`);
+  } finally {
+    fakeBackup.create = origCreate;
+  }
+});
+
+test("CRASH_RESET: 重置成功返回 backupId（正常路径）", async () => {
+  const result = await ipc.invoke(CH.CRASH_RESET);
+  assert.equal(result.reset, true);
+  assert.equal(result.backupId, "backup-id");
 });

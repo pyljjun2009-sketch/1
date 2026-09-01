@@ -168,11 +168,21 @@ function registerIpc({ server, getWindow, upgradeManager, backupManager, crashRe
   ipc.handle(CH.CRASH_MARK_CLEAN, (event) => { assertSettingsPage(event); crashRecovery.markCleanExit(); return true; });
   ipc.handle(CH.CRASH_RESET, (event) => {
     assertSettingsPage(event);
-    const backup = backupManager.create("重置前自动备份");
+    // 备份失败（磁盘满/权限）时不执行重置，避免无备份可回滚的数据丢失
+    let backup;
+    try {
+      backup = backupManager.create("重置前自动备份");
+    } catch (err) {
+      return { reset: false, error: `重置前备份失败，已取消重置：${err.message}` };
+    }
     const { rmSync, mkdirSync } = require("node:fs");
     const profileDir = require("node:path").join(crashRecovery.dshHome, "profiles", "web");
-    rmSync(profileDir, { recursive: true, force: true });
-    mkdirSync(profileDir, { recursive: true });
+    try {
+      rmSync(profileDir, { recursive: true, force: true });
+      mkdirSync(profileDir, { recursive: true });
+    } catch (err) {
+      return { reset: false, backupId: backup.id, error: `重置 Profile 失败：${err.message}（备份 ${backup.id} 已保留，可手动恢复）` };
+    }
     return { reset: true, backupId: backup.id };
   });
 

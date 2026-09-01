@@ -143,6 +143,10 @@
     if (!confirm("将重置 DSH Profile（备份当前状态后删除，下次启动重装依赖）。确定？")) return;
     try {
       const result = await dsh.crash.resetProfile();
+      if (result && result.reset === false) {
+        toast(`重置失败：${result.error || "未知错误"}`, 5000);
+        return;
+      }
       toast(`Profile 已重置（备份: ${result.backupId}）`);
       await loadCrash();
     } catch (err) {

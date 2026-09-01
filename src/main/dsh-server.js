@@ -478,9 +478,11 @@ class DshServer extends EventEmitter {
         require("node:fs").writeFileSync(testFile, "ok");
         require("node:fs").unlinkSync(testFile);
       } catch (err) {
+        // 任何写入失败都应阻断启动（EPERM 最常见；ENOSPC/EROFS 等同样致命）
         if (err.code === "EPERM") {
           return `DSH profile 目录无法写入: ${profileDir}（EPERM 权限错误）——请检查目录权限或以管理员身份运行`;
         }
+        return `DSH profile 目录无法写入: ${profileDir}（${err.code || err.message}）——请检查磁盘空间与目录权限`;
       }
       // bundle 存在性验证：package.json 声明的每个 bundle 必须在 node_modules 实际存在
       // （防止 package.json / pnpm-lock.yaml / node_modules 三者状态不一致导致启动失败）
