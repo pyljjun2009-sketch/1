@@ -81,7 +81,7 @@ npm run pack              # 仅解包目录（快速验证）
   ```
 
 - 两个目录都被占用（两个实例同时在跑）时会提示关闭一个。
-- 本仓库位于 `D:\AI\DSH`（非 OneDrive 同步目录，避免同步文件锁）；构建产物输出到 `%LOCALAPPDATA%\dsh-desktop-build-a/-b`，同样避开同步目录。
+- 本仓库位于 `D:\AI\DSHarness`（非 OneDrive 同步目录，避免同步文件锁）；构建产物输出到 `%LOCALAPPDATA%\dsh-desktop-build-a/-b`，同样避开同步目录。
 
 ## 配置
 
@@ -133,7 +133,7 @@ npm run pack              # 仅解包目录（快速验证）
 ## 目录结构
 
 ```
-D:\AI\DSH/
+D:\AI\DSHarness/
 ├─ src/
 │  ├─ main/            # 主进程
 │  │  ├─ index.js      # 入口（GPU 策略、单实例、冒烟协议、退出清理）
