@@ -80,7 +80,8 @@ npm run pack              # 仅解包目录（快速验证）
   set DSH_DESKTOP_BUILD_DIR=D:\build\dsh-desktop&& npm run dist
   ```
 
-- 两个目录都被占用（两个实例同时在跑）时会提示关闭一个。本仓库位于 OneDrive 同步目录，偶发文件锁（`ReplaceFileW EIO`）时重试。
+- 两个目录都被占用（两个实例同时在跑）时会提示关闭一个。
+- 本仓库位于 `D:\AI\DSH`（非 OneDrive 同步目录，避免同步文件锁）；构建产物输出到 `%LOCALAPPDATA%\dsh-desktop-build-a/-b`，同样避开同步目录。
 
 ## 配置
 
@@ -121,7 +122,7 @@ npm run pack              # 仅解包目录（快速验证）
 ## 目录结构
 
 ```
-DSHaness/
+D:\AI\DSH/
 ├─ src/
 │  ├─ main/            # 主进程
 │  │  ├─ index.js      # 入口（GPU 策略、单实例、冒烟协议、退出清理）
@@ -136,7 +137,7 @@ DSHaness/
 │  │  ├─ preload.js        # 最小权限桥接（DSH 页面/加载页用）
 │  │  └─ preload-settings.js  # 完整管理权限桥接（设置页专用）
 │  └─ shared/channels.js   # IPC 通道名
-├─ test/               # node:test 单元测试（60 个用例）
+├─ test/               # node:test 单元测试（76 个用例）
 ├─ scripts/            # check-syntax / clean / build / init-smoke-settings / verify-build
 ├─ docs/adr/           # 架构决策记录（ADR-001/002）
 ├─ assets/             # 图标、加载页/设置页及受 CSP 保护的页面脚本
