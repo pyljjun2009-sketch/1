@@ -148,7 +148,7 @@ class BackupManager extends EventEmitter {
     });
   }
 
-  /** 恢复备份（V1：先自动创建恢复前快照，再覆盖目标文件）。 */
+  /** 恢复备份（先自动快照 → 删当前 → 覆盖 → 原子恢复）。 */
   restore(id) {
     if (!validateId(id)) throw new Error(`无效的备份 ID: ${id}`);
     const srcDir = join(this.backupDir, id);
@@ -159,6 +159,14 @@ class BackupManager extends EventEmitter {
 
     // 确保目标目录存在
     mkdirSync(this.profilesDir, { recursive: true });
+
+    // 停机：删除当前 profiles-web 中的所有受管文件（恢复前清空）
+    const { readdirSync, unlinkSync } = require("node:fs");
+    if (existsSync(this.profilesDir)) {
+      for (const f of readdirSync(this.profilesDir)) {
+        try { unlinkSync(join(this.profilesDir, f)); } catch { /* 忽略 */ }
+      }
+    }
 
     // 恢复 profiles-web 文件
     const profilesDir = join(srcDir, "profiles-web");

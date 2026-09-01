@@ -617,7 +617,9 @@ class DshServer extends EventEmitter {
     }
 
     this.port = await findFreePort(preferred, host);
-    this.url = `http://${host}:${this.port}/`;
+    // IPv6 地址需要方括号（http://[::1]:3080/）
+    const hostDisplay = host.includes(":") ? `[${host}]` : host;
+    this.url = `http://${hostDisplay}:${this.port}/`;
     this.cwd = this._resolveWorkingDir();
 
     const launch = this._resolveLaunch();
@@ -745,6 +747,8 @@ class DshServer extends EventEmitter {
     }
     // 等待期间已进入 error（如崩溃次数耗尽、spawn 失败），保留原错误信息
     if (this.state === "error") return this.status();
+    // 超时：终止残余子进程，避免僵尸
+    this._killChild();
     this._setState("error", {
       error: `后端启动超时（${Math.round(this.readyTimeoutMs / 1000)}s），请检查 dsh 是否安装正确`,
     });
@@ -774,6 +778,19 @@ class DshServer extends EventEmitter {
    *  - 枚举后代进程，确认树内无残留（detached 逃逸场景）
    *  - 清理失败返回 error 状态并带诊断日志，而不是伪装成 stopped
    */
+  /** 安全终止子进程（超时/预检失败等场景）。不等待确认。 */
+  _killChild() {
+    const child = this.child;
+    if (!child || !child.pid) return;
+    if (process.platform === "win32") {
+      try { spawnSync("taskkill", ["/pid", String(child.pid), "/F"], { windowsHide: true, stdio: "ignore" }); } catch { /* 忽略 */ }
+    } else {
+      try { child.kill("SIGTERM"); } catch { /* 忽略 */ }
+    }
+    this.child = null;
+    this.pid = null;
+  }
+
   async stop() {
     this._stopRequested = true;
     if (this._restartTimer) {
@@ -852,7 +869,10 @@ class DshServer extends EventEmitter {
   }
 
   async restart() {
-    await this.stop();
+    const stopResult = await this.stop();
+    if (stopResult.state === "error") {
+      return { state: "error", error: `停止旧后端失败：${stopResult.error}` };
+    }
     this._crashCount = 0;
     return this.start();
   }

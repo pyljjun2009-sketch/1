@@ -142,16 +142,22 @@ class Settings {
       }
       this.data[key] = patch[key];
     }
-    this.save();
+    const saved = this.save();
+    if (!saved) {
+      console.warn("[dsh-desktop] 配置已应用到内存，但磁盘写入失败（重启后可能丢失）");
+    }
   }
 
   save() {
-    if (!this.file) return;
+    if (!this.file) return false;
     const { writeFileSync } = require("node:fs");
     try {
       writeFileSync(this.file, JSON.stringify(this.data, null, 2) + "\n", "utf8");
+      return true;
     } catch (err) {
       console.error("[dsh-desktop] 保存配置失败:", err);
+      this.lastSaveError = err.message;
+      return false;
     }
   }
 

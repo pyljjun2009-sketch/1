@@ -13,6 +13,7 @@ const CH = require("../src/shared/channels.js");
 /** 收集 handle 注册的假 ipcMain */
 function makeFakeIpc() {
   const handlers = new Map();
+  const settingsUrl = `file:///${join(__dirname, "..", "assets", "settings.html").replace(/\\/g, "/")}`;
   return {
     handlers,
     handle(channel, fn) {
@@ -21,7 +22,7 @@ function makeFakeIpc() {
     async invoke(channel, ...args) {
       const fn = handlers.get(channel);
       if (!fn) throw new Error(`no handler for ${channel}`);
-      return fn({ senderFrame: { url: "file:///C:/test/assets/settings.html" } }, ...args);
+      return fn({ senderFrame: { url: settingsUrl } }, ...args);
     },
   };
 }

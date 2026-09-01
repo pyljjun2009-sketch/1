@@ -238,7 +238,8 @@ if (!gotLock) {
       const smokeCleanup = async () => {
         if (pageTimer) clearTimeout(pageTimer);
         if (smokeTimer) clearTimeout(smokeTimer);
-        if (server) await server.stop(); // app.exit 不触发 quit 事件，需先确认式清理后端进程树
+        if (server) await server.stop();
+        if (crashRecovery) crashRecovery.markCleanExit(); // app.exit 不触发 before-quit，需显式写入正常退出标记
       };
 
       // 断言 2/2：真实页面（http://）完成加载

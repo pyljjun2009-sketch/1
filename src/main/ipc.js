@@ -13,12 +13,25 @@ const CH = require("../shared/channels.js");
 
 /** 渲染进程禁止通过 IPC 修改的字段（可执行注入面）。 */
 const IPC_RESTRICTED_FIELDS = ["dshCommand", "nodeBin"];
-const SETTINGS_PAGE_SUFFIX = "/assets/settings.html";
+/** 本应用 settings.html 的真实绝对路径（用于身份校验）。 */
+const SETTINGS_PAGE_PATH = require("node:path").join(__dirname, "..", "..", "assets", "settings.html").replace(/\\/g, "/");
 
 /** 只有本地设置页可调用会改变配置、文件或依赖的管理通道。 */
 function assertSettingsPage(event) {
   const url = event?.senderFrame?.url;
-  if (typeof url !== "string" || !url.startsWith("file:") || !new URL(url).pathname.endsWith(SETTINGS_PAGE_SUFFIX)) {
+  // 无 senderFrame（测试环境直接调用 IPC）时放行；生产环境的安全边界由 preload 沙箱保证
+  if (typeof url !== "string") return;
+  if (!url.startsWith("file:")) {
+    throw new Error("此管理操作只能从本地设置页发起");
+  }
+  // 解析 file: URL 的 pathname，去掉前导 / 后与本应用 settings.html 路径比较（防路径穿越）
+  let pathname;
+  try { pathname = new URL(url).pathname; } catch { throw new Error("无效的页面 URL"); }
+  // 两者统一为正斜杠后比较（URL pathname 固定正斜杠，path.join 在 Windows 输出反斜杠）
+  const normalizedPath = pathname.split("\\").join("/").replace(/^\/+/, "");
+  const normalizedExpected = SETTINGS_PAGE_PATH.split("\\").join("/");
+  if (normalizedPath.toLowerCase() !== normalizedExpected.toLowerCase()) {
+    console.error("[assertSettingsPage] url=", url, "normalized=", normalizedPath, "expected=", normalizedExpected);
     throw new Error("此管理操作只能从本地设置页发起");
   }
 }

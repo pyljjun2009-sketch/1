@@ -20,9 +20,16 @@ function setup() {
 
 test("正常退出标记: markCleanExit + detectUncleanExit", () => {
   const { cr } = setup();
-  assert.ok(cr.detectUncleanExit(), "首次应为异常退出");
+  // 首次启动（无 cleanExit、无 lastKnownGood、无崩溃记录）→ 不算异常退出
+  assert.ok(!cr.detectUncleanExit(), "首次启动不判定为异常退出");
   cr.markCleanExit();
   assert.ok(!cr.detectUncleanExit(), "标记后应为正常退出");
+  // 有 lastKnownGood 但无 cleanExit → 异常退出
+  cr.markCleanExit();
+  const { unlinkSync } = require("node:fs");
+  unlinkSync(cr.cleanExitFile);
+  cr.markLastKnownGood();
+  assert.ok(cr.detectUncleanExit(), "有成功记录但无 cleanExit 应为异常退出");
 });
 
 test("崩溃计数: increment/reset/get", () => {

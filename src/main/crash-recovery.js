@@ -36,9 +36,13 @@ class CrashRecovery extends EventEmitter {
     try { unlinkSync(this.cleanExitFile); } catch { /* 不存在时忽略 */ }
   }
 
-  /** 应用异常退出后重启时：检查是否为异常退出。 */
+  /** 检查是否为异常退出。全新安装（无 cleanExit、无 lastKnownGood、无崩溃记录）识别为首次启动。 */
   detectUncleanExit() {
-    return !existsSync(this.cleanExitFile);
+    if (existsSync(this.cleanExitFile)) return false; // 正常退出过
+    if (this.getCrashCount() > 0) return true; // 有崩溃记录 → 异常退出
+    if (existsSync(this.lastGoodFile)) return true; // 有成功记录但无 cleanExit → 异常退出
+    // 全部不存在 → 首次启动，非异常
+    return false;
   }
 
   /** 获取崩溃计数。 */
