@@ -30,7 +30,7 @@
 
   function badgeClass(status) {
     if (status === "up-to-date" || status === "ok" || status === "healthy") return "ok";
-    if (status === "update-available") return "info";
+    if (status === "update-available" || status === "update-downloaded" || status === "installing") return "info";
     if (status === "warning" || status === "stub") return "warn";
     return "err";
   }
@@ -57,7 +57,8 @@
     if (!confirm(`确定恢复备份 ${id}？当前配置会被覆盖（会先自动备份）。`)) return;
     try {
       const result = await dsh.backup.restore(id);
-      toast(`已恢复（恢复前备份: ${result.beforeBackupId}）`);
+      const suffix = result.restarted ? "，依赖已同步且后端已重启" : "";
+      toast(`已恢复（恢复前备份: ${result.beforeBackupId}${suffix}）`);
       await loadBackups();
     } catch (err) {
       toast(`恢复失败：${errorMessage(err)}`, 5000);
@@ -208,7 +209,7 @@
   async function loadUpgrade() {
     const el = byId("upgrade-status");
     const tracks = [
-      ["app", "桌面应用", "应用自身更新（需配置 electron-builder publish）"],
+      ["app", "桌面应用", "从项目 GitHub Releases 获取正式版；下载后需确认重启安装"],
       ["backend", "DSH 后端", "@deepseek-ai/dsh npm 包更新"],
       ["profile", "Profile bundles", "已安装 bundle 依赖的版本更新"],
     ];
@@ -218,8 +219,16 @@
         const detail = result.status === "update-available" && result.bundles?.length
           ? result.bundles.map((bundle) => `${esc(bundle.name)}: ${esc(bundle.current)} → ${esc(bundle.latest)}`).join(", ")
           : esc(result.message || result.reason || "");
-        const action = result.status === "update-available" && track === "profile"
-          ? '<button class="btn primary" style="margin-top:8px;" data-action="profile-upgrade">更新 Profile bundles</button>' : "";
+        const actionLabels = {
+          app: "下载桌面应用更新",
+          backend: "升级 DSH 后端",
+          profile: "更新 Profile bundles",
+        };
+        const action = result.status === "update-available"
+          ? `<button class="btn primary" style="margin-top:8px;" data-action="apply-upgrade" data-track="${esc(track)}">${esc(actionLabels[track])}</button>`
+          : track === "app" && result.status === "update-downloaded"
+            ? '<button class="btn primary" style="margin-top:8px;" data-action="install-app">保存工作并重启安装</button>'
+            : "";
         return `<div class="status-card"><strong>${label}</strong> <span class="badge ${badgeClass(result.status)}">${esc(result.status)}</span><div style="font-size:12px;color:#8b949e;margin-top:4px;">${description}</div>${detail ? `<div style="font-size:12px;margin-top:4px;">${detail}</div>` : ""}${action}</div>`;
       } catch {
         return `<div class="status-card"><strong>${label}</strong> <span class="badge err">检查失败</span></div>`;
@@ -229,16 +238,50 @@
     byId("upgrade-status-msg").textContent = "";
   }
 
-  async function applyProfileUpgrade() {
+  async function applyUpgrade(track, button) {
+    const labels = { app: "桌面应用", backend: "DSH 后端", profile: "Profile bundles" };
+    if (!Object.prototype.hasOwnProperty.call(labels, track)) return;
+    if (!confirm(`确定更新${labels[track]}？操作期间请勿关闭应用。`)) return;
     byId("upgrade-status-msg").textContent = "正在更新…";
+    if (button) button.disabled = true;
     try {
-      const result = await dsh.upgrade.apply("profile");
-      toast(result.message || "操作完成");
+      const result = await dsh.upgrade.apply(track);
+      if (result.status === "error" || result.status === "not-configured") {
+        throw new Error(result.reason || result.message || "升级失败");
+      }
+      toast(result.message || `${labels[track]}操作完成`, 5000);
       await loadUpgrade();
     } catch (err) {
       byId("upgrade-status-msg").textContent = `更新失败：${errorMessage(err)}`;
+      toast(`更新失败：${errorMessage(err)}`, 5000);
+    } finally {
+      if (button) button.disabled = false;
     }
   }
+
+  async function installApp(button) {
+    if (!confirm("请先保存会话和文件。安装将备份配置、停止后端并退出应用，是否继续？")) return;
+    button.disabled = true;
+    try {
+      const result = await dsh.upgrade.installApp();
+      if (result.status === "error") throw new Error(result.reason);
+      byId("upgrade-status-msg").textContent = result.message;
+    } catch (err) {
+      toast(`安装未开始：${errorMessage(err)}`, 5000);
+      button.disabled = false;
+    }
+  }
+
+  const unsubscribeUpgrade = dsh.upgrade.onEvent((payload) => {
+    if (payload.type !== "app-event") return;
+    if (payload.event === "download-progress" && payload.percent !== null) {
+      byId("upgrade-status-msg").textContent = `正在下载桌面更新：${payload.percent.toFixed(1)}%`;
+    } else if (payload.event === "error") {
+      byId("upgrade-status-msg").textContent = `更新失败：${payload.message}`;
+      document.querySelector('[data-action="install-app"]')?.removeAttribute("disabled");
+    }
+  });
+  window.addEventListener("beforeunload", unsubscribeUpgrade, { once: true });
 
   document.querySelectorAll(".tab").forEach((tab) => tab.addEventListener("click", () => {
     document.querySelectorAll(".tab").forEach((item) => item.classList.remove("active"));
@@ -274,7 +317,8 @@
     else if (action === "profile-check") await checkProfile();
     else if (action === "profile-resync") await resyncProfile();
     else if (action === "profile-reset") await resetProfile();
-    else if (action === "profile-upgrade") await applyProfileUpgrade();
+    else if (action === "apply-upgrade") await applyUpgrade(target.dataset.track, target);
+    else if (action === "install-app") await installApp(target);
   });
 
   void loadBackups();

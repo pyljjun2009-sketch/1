@@ -1,7 +1,7 @@
 # DeepSeek Harness Desktop（DSH 桌面端）—— 项目完整文档
 
 > 本文件为项目全貌文档，聚合 README、CHANGELOG、UPGRADE、架构决策与代码实现信息。
-> 仓库位置：`D:\AI\DSHarness` ｜ 远程：`https://github.com/pyljjun2009-sketch/1` ｜ 最新发布：`v0.1.0`
+> 仓库位置：`D:\AI\DSH` ｜ 远程：`https://github.com/pyljjun2009-sketch/1` ｜ 当前项目版本：`v0.1.2` ｜ GitHub 最新发布：`v0.1.0`（2026-09-02 核验，本地尚未发布）
 
 ---
 
@@ -15,7 +15,7 @@
 
 - 最初目标：将 DSH 封装为独立 Codex 风格桌面 UI，预留升级接口，其他不变
 - 2.0 计划（决策点已确认 2026-08-14）：路径 B（本项目完善）、V1 不做备份加密、加入 Profile 轨道、集成设置面板、GitHub Release 发布
-- 已发布 v0.1.0 正式版（NSIS 安装包 + 便携版 + electron-updater 元数据）
+- 已发布 v0.1.0 正式版；v0.1.2 为本地可升级安装版，接入 GitHub Releases，保留 v0.1.1 的全部完善内容
 
 ### 技术栈
 
@@ -23,7 +23,7 @@
 |---|---|
 | 桌面框架 | Electron 43.x + Node 22 主进程 |
 | 打包 | electron-builder 26.x（NSIS + portable） |
-| 测试 | node:test（96 个单元测试 + 29 文件语法检查 + 冒烟协议） |
+| 测试 | node:test（125 个用例 + 33 文件语法检查 + HTTP 更新校验 + 冒烟协议） |
 | 后端 | `@deepseek-ai/dsh`（npm 全局安装，外部进程托管） |
 | 语言 | JavaScript（CommonJS），无构建步骤（除打包） |
 
@@ -64,15 +64,15 @@
 
 | 模块 | 行数 | 职责 |
 |---|---|---|
-| `index.js` | 372 | 入口：GPU 策略、单实例锁、冒烟协议、退出清理、启动后版本检查 |
-| `dsh-server.js` | 891 | 后端生命周期：预检、端口、就绪轮询、退避重启、确认式进程树清理 |
-| `config.js` | 152 | 配置存储 + schema 校验（非法值拒绝/回退默认） |
-| `window.js` | 176 | 主窗口与菜单；导航安全（同源限制、外链交给系统浏览器） |
-| `ipc.js` | 227 | IPC 接线（依赖可注入）；设置页身份校验；受限字段防护 |
-| `updater.js` | 452 | 升级接口（三轨道：app/backend/profile） |
-| `backup.js` | 253 | 数据备份管理器（创建/列表/恢复/对比/删除，保留 10 份） |
-| `crash-recovery.js` | 104 | 崩溃恢复管理器（退出标记、崩溃计数、诊断） |
-| `watchdog.js` | 195 | 崩溃看门狗（独立进程，异常退出自动打开浏览器） |
+| `index.js` | 390 | 入口：GPU 策略、单实例锁、冒烟协议、退出清理、启动后版本检查 |
+| `dsh-server.js` | 977 | 后端生命周期：预检、端口、就绪轮询、退避重启、确认式进程树清理 |
+| `config.js` | 183 | 配置存储 + 原子 schema 校验（非法值拒绝/回退默认） |
+| `window.js` | 182 | 主窗口与菜单；导航安全（同源限制、外链交给系统浏览器） |
+| `ipc.js` | 267 | IPC 接线；设置页身份校验；事务恢复编排；受限字段防护 |
+| `updater.js` | 525 | 三轨升级、版本校验、并发串行化与更新后重启 |
+| `backup.js` | 315 | 完整性校验、事务恢复、创建/列表/对比/删除，保留 10 份 |
+| `crash-recovery.js` | 113 | 崩溃恢复管理器（退出标记、崩溃计数、诊断） |
+| `watchdog.js` | 209 | 崩溃看门狗（独立进程，异常退出自动打开浏览器） |
 
 ### 2.3 进程模型
 
@@ -115,7 +115,7 @@
 
 | track | 含义 | 状态 |
 |---|---|---|
-| `app` | 桌面应用自升级 | 内置 electron-updater；未配置发布源时 `not-configured` |
+| `app` | 桌面应用自升级 | v0.1.2 NSIS 安装版已接入 GitHub；下载后确认重启安装 |
 | `backend` | DSH 后端（npm 包） | check() 已实现；apply() 已实现（备份→npm→校验→同步→重启） |
 | `profile` | Profile bundle 依赖 | check() 已实现；apply() 已实现（dsh plugin update） |
 
@@ -166,19 +166,20 @@
 
 ## 五、测试与质量
 
-### 5.1 测试清单（96 个单元测试）
+### 5.1 测试清单（125 个用例）
 
 | 测试文件 | 用例数 | 覆盖 |
 |---|---|---|
-| `dsh-server.test.js` | 22 | 端口/启动/就绪/崩溃重启/超时/进程树/竞态 |
-| `updater.test.js` | 17 | 三轨道/版本校验/包名校验/注入防护 |
-| `ipc.test.js` | 14 | IPC 接线/权限/参数校验/重置安全 |
-| `backup.test.js` | 10 | 备份创建/恢复/对比/删除/竞态回归 |
+| `dsh-server.test.js` | 24 | 端口/启动/就绪/崩溃重启/超时/进程树/竞态/非法 bundle |
+| `updater.test.js` | 33 | 三轨道/版本校验/防降级/下载与安装状态/并发防护 |
+| `app-update-integration.test.js` | 1 | 真实 HTTP 下载与 SHA-512 拒绝篡改 |
+| `ipc.test.js` | 17 | IPC 权限/安全恢复/安装权限/设置页进度 |
+| `backup.test.js` | 14 | 备份创建/完整性/事务恢复/对比/删除/竞态回归 |
 | `watchdog.test.js` | 9 | 看门狗决策/URL 校验/重试 |
-| `config.test.js` | 9 | 配置存储/校验/回退 |
+| `config.test.js` | 11 | 配置存储/原子补丁/重复初始化/校验/回退 |
 | `crash-recovery.test.js` | 8 | 退出标记/崩溃计数/诊断 |
 | `preload-consistency.test.js` | 3 | 通道名一致性 |
-| `assets-security.test.js` | 2 | 页面 CSP/转义 |
+| `assets-security.test.js` | 3 | 页面 CSP/转义/三轨升级入口 |
 | `window-security.test.js` | 2 | 窗口权限/导航安全 |
 
 ### 5.2 冒烟协议（退出码 0=成功 / 1=失败）
@@ -193,13 +194,15 @@ FAIL 行附带完整诊断：state/error/cwd/command/source/bin/version/lastExit
 ### 5.3 命令
 
 ```bash
-npm test                  # 全部单元测试（96 个用例）
+npm test                  # 全部测试（125 个用例）
 npm run test:unit         # 配置/升级/IPC 快速单测
 npm run test:process      # Windows 进程树与停止确认
-npm run test:syntax       # 全部 JS 语法检查（29 个文件）
+npm run test:syntax       # 全部 JS 语法检查（33 个文件）
 npm run test:smoke        # 冒烟（真实 dsh）
 npm run test:smoke:fixture# 冒烟（内置假 DSH fixture，CI 可用）
 npm run test:package      # 解包构建 + ASAR 内容验证（18 个关键文件）
+npm run verify            # 一键验收（模拟 DSH，适合 CI）
+npm run verify:local      # 一键验收 + 本机真实 DSH
 ```
 
 ---
@@ -214,11 +217,12 @@ npm run dist:portable     # 仅便携版 exe
 npm run pack              # 仅解包目录（快速验证）
 ```
 
-### 6.2 A/B 双目录策略（scripts/build.js）
+### 6.2 项目内 A/B 双目录策略（scripts/build.js）
 
-- 构建目录：`%LOCALAPPDATA%\dsh-desktop-build-a` / `-b`
+- 构建目录：`D:\AI\DSH\artifacts\dsh-desktop-build-a` / `-b`
 - 运行中的实例在 A 时构建到 B，反之亦然——**永不因 exe 占用而 EBUSY**
 - 构建后自动更新桌面快捷方式 + 写 `current.txt`
+- 安装包、便携版、blockmap 和 `latest.yml` 自动汇总到 `D:\AI\DSH\release`
 - 环境变量 `DSH_DESKTOP_BUILD_DIR` 可显式指定单目录
 
 ### 6.3 产物验证
@@ -281,20 +285,37 @@ Test-Path "$root\lib\bin.js"                                          # 必须�
 
 - `docs/adr/ADR-001-safe-rendering.md`：安全渲染（inprocess GPU 默认）
 - `docs/adr/ADR-002-backend-ui-lifecycle.md`：后端与 UI 生命周期（keepBackendRunning）
+- `docs/adr/ADR-003-transactional-recovery-and-serialized-upgrades.md`：事务式恢复与升级串行化
 - `docs/DSH-启动卡住经验总结.md`：故障排查经验（视觉工具黑屏、浏览器自动弹出等）
 
 ---
 
 ## 九、变更历史摘要
 
-### [Unreleased]（多轮测试修复，17 项）
+### [0.1.2] - 2026-09-02（可升级安装版）
 
+- 接入现有公开 GitHub 更新源，下载进度、就绪状态与确认重启安装完整闭环
+- 安装前备份并停止后端；不自动降级，不自动安装 alpha，不在普通退出时安装
+- 区分安装版、便携版与开发目录，修复进度事件无法到达设置页
+- Electron 43.4.0 → 43.5.1；本地构建复用已校验运行时，默认禁止自动发布
+- 125 个测试、真实升级组件 HTTP/校验测试、公网只读更新检查、ASAR 和发布元数据校验通过
+- 本机全局 DSH 当前可执行文件缺失，原真实全局冒烟失败；改用项目内隔离官方 DSH 0.1.1-rc.2 完成真实打包态启动验证，未修改用户全局安装。详情见 `docs/RELEASE-0.1.2.md`
+
+### [0.1.1] - 2026-09-01（多轮测试完善版）
+
+- 备份恢复加入完整 SHA-256 校验、允许路径检查、同卷暂存切换与失败回滚
+- 运行中恢复执行“停止后端 → 恢复 → 同步 Profile 依赖 → 重启”完整闭环
+- 桌面应用、DSH 后端、Profile bundles 三轨升级补全，并加入同轨并发保护
+- 配置更新改为原子校验应用；管理 IPC 默认拒绝缺少来源信息的请求
+- 新增一键验收命令、事务恢复 ADR 和 0.1.1 安装包/便携包
 - 备份恢复竞态（源备份被 cleanup 删除）→ 先快照到内存
 - restore 清理 node_modules（bundle 一致性）
 - diff 支持 settings.yaml 全局设置对比
 - 崩溃待重启期间 stop() 生效（不再被拉起）
 - 并发 stop/start 竞态（无孤儿、状态一致）
 - child 引用竞态、_tryReuse 契约、taskkill /T、pidExists 误判、findFreePort 超时、IPv6 URL、阻塞优化、进程组清理、host 校验、冒烟跳过看门狗、CRASH_RESET 数据安全、preflight 全错误拦截
+
+验证结果：111/111 单元测试、30/30 语法检查、npm audit 0 漏洞、模拟与真实 DSH 冒烟、打包态真实页面冒烟、ASAR 18/18 校验全部通过。
 
 ### [0.1.0] - 2026-09-01（首个正式版）
 
@@ -312,9 +333,10 @@ Test-Path "$root\lib\bin.js"                                          # 必须�
 
 | 路径 | 用途 |
 |---|---|
-| `D:\AI\DSHarness` | 项目源码 |
+| `D:\AI\DSH` | 项目源码 |
 | `%APPDATA%\dsh-desktop\` | 配置、备份、看门狗日志、状态标记 |
-| `%LOCALAPPDATA%\dsh-desktop-build-a/-b` | 构建产物（A/B 交替） |
+| `D:\AI\DSH\artifacts\dsh-desktop-build-a/-b` | 构建产物（A/B 交替） |
+| `D:\AI\DSH\release` | 安装包、便携版与升级元数据汇总目录 |
 | `~/.dsh/` | DSH 数据（profile、设置） |
 | `%APPDATA%\npm\node_modules\@deepseek-ai\dsh` | 全局 DSH 安装 |
 

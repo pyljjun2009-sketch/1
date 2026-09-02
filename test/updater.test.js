@@ -9,6 +9,107 @@ function fakeServer(version) {
   return { version, _detectVersion: async () => version };
 }
 
+function appHarness(latest = "2.0.0", options = {}) {
+  const updater = new (require("node:events").EventEmitter)();
+  updater.currentVersion = "1.0.0";
+  const calls = [];
+  updater.checkForUpdates = async () => { calls.push("check"); return { updateInfo: { version: latest } }; };
+  updater.downloadUpdate = async () => { calls.push("download"); updater.emit("download-progress", { percent: 57.25 }); updater.emit("update-downloaded", { version: latest }); };
+  updater.quitAndInstall = (...args) => { calls.push(["install", ...args]); };
+  const manager = new UpgradeManager({ server: fakeServer("1.0.0"), appUpdaterLoader: async () => updater, prepareAppInstall: async () => { calls.push("prepare"); }, ...options });
+  return { manager, updater, calls };
+}
+
+test("app: 拒绝旧版、相同版与预发布版，不下载", async () => {
+  for (const latest of ["0.1.0", "1.0.0", "1.0.0+build.2", "2.0.0-alpha.1"]) {
+    const { manager, calls } = appHarness(latest);
+    assert.equal((await manager.apply("app")).status, "up-to-date");
+    assert.equal(calls.includes("download"), false);
+  }
+});
+
+test("backend: latest 低于当前预览版本时不提示降级", async () => {
+  const original = global.fetch;
+  global.fetch = async () => ({ ok: true, json: async () => ({ version: "0.1.1-rc.2" }) });
+  try {
+    const manager = new UpgradeManager({ server: fakeServer("0.1.2-alpha.4") });
+    assert.equal((await manager.check("backend")).status, "up-to-date");
+  } finally { global.fetch = original; }
+});
+
+test("app: 开发模式空结果与断网必须区别报告", async () => {
+  const { manager, updater } = appHarness();
+  updater.checkForUpdates = async () => null;
+  assert.equal((await manager.check("app")).status, "not-configured");
+  updater.checkForUpdates = async () => { throw new Error("ECONNRESET"); };
+  assert.equal((await manager.check("app")).status, "error");
+});
+
+test("app: 更新组件的系统兼容性和灰度发布限制不能被版本比较绕过", async () => {
+  const { manager, updater } = appHarness();
+  updater.checkForUpdates = async () => ({ updateInfo: { version: "2.0.0" }, isUpdateAvailable: false });
+  assert.equal((await manager.apply("app")).status, "up-to-date");
+});
+
+test("app: 便携版不自动下载或安装", async () => {
+  const { manager, calls } = appHarness("2.0.0", { isPortable: true });
+  assert.equal((await manager.apply("app")).status, "not-configured");
+  assert.equal((await manager.installApp()).status, "error");
+  assert.equal(calls.length, 0);
+});
+
+test("app: 解包目录不冒充已安装应用", async () => {
+  const { manager, calls } = appHarness("2.0.0", { canInstallApp: false });
+  assert.equal((await manager.apply("app")).status, "not-configured");
+  assert.equal((await manager.installApp()).status, "error");
+  assert.equal(calls.length, 0);
+});
+
+test("app: 下载状态持久到下一次检查，进度保留数字且禁用退出自动安装", async () => {
+  const { manager, updater, calls } = appHarness();
+  const events = [];
+  manager.setEventSink((event) => events.push(event));
+  await manager.apply("app");
+  assert.equal((await manager.check("app")).status, "update-downloaded");
+  await manager.apply("app");
+  assert.equal(calls.filter((c) => c === "download").length, 1);
+  assert.equal(updater.autoInstallOnAppQuit, false);
+  assert.equal(updater.allowDowngrade, false);
+  assert.equal(events.find((e) => e.event === "download-progress").percent, 57.25);
+  assert.ok(events.every((e) => e.type === "app-event"));
+});
+
+test("app: 并发检查只发一个请求", async () => {
+  const { manager, calls } = appHarness();
+  await Promise.all([manager.check("app"), manager.check("app"), manager.check("app")]);
+  assert.equal(calls.filter((c) => c === "check").length, 1);
+});
+
+test("app: 校验失败时不保留可安装状态", async () => {
+  const { manager, updater } = appHarness();
+  updater.downloadUpdate = async () => { throw new Error("sha512 checksum mismatch"); };
+  assert.equal((await manager.apply("app")).status, "error");
+  assert.equal((await manager.installApp()).status, "error");
+});
+
+test("app: 必须下载后才能安装，准备成功后只安装一次", async () => {
+  const { manager, calls } = appHarness();
+  assert.equal((await manager.installApp()).status, "error");
+  await manager.apply("app");
+  assert.equal((await manager.installApp()).status, "installing");
+  assert.equal((await manager.installApp()).status, "error");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls.slice(-2), ["prepare", ["install", false, true]]);
+});
+
+test("app: 备份或停止失败时不启动安装器，并允许重试", async () => {
+  const { manager, calls } = appHarness("2.0.0", { prepareAppInstall: async () => { throw new Error("停止失败"); } });
+  await manager.apply("app");
+  assert.match((await manager.installApp()).reason, /停止失败/);
+  assert.equal(manager._installing, false);
+  assert.equal(calls.some(Array.isArray), false);
+});
+
 test("backend check: 有新版本 -> update-available", async () => {
   const originalFetch = global.fetch;
   global.fetch = async () => ({ ok: true, json: async () => ({ version: "9.9.9" }) });
@@ -88,6 +189,27 @@ test("backend apply: npm 成功但 yaml 缺失时报错并提示回滚", async (
   assert.equal(r.status, "error"); // yaml 校验失败
   assert.ok(r.reason.includes("yaml"));
   assert.ok(r.hint.includes("回滚"));
+});
+
+test("backend apply: 实际安装版本与目标不一致时明确失败", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = require("node:fs");
+  const { join } = require("node:path");
+  const tempDir = mkdtempSync(join(require("node:os").tmpdir(), "dsh-updater-version-"));
+  const server = fakeServer("1.2.4");
+  server._binPath = join(tempDir, "lib", "bin.js");
+  mkdirSync(join(tempDir, "node_modules", "yaml", "dist", "schema", "yaml-1.1"), { recursive: true });
+  writeFileSync(join(tempDir, "node_modules", "yaml", "dist", "schema", "yaml-1.1", "merge.js"), "// ok");
+  try {
+    const result = await BACKEND_UPGRADER.apply({
+      server,
+      targetVersion: "1.2.3",
+      execNpm: () => ({ status: 0, stdout: "", stderr: "" }),
+    });
+    assert.equal(result.status, "error");
+    assert.match(result.reason, /不一致/);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 });
 
 test("backend apply: 拒绝非 semver 的目标版本，且不会执行 npm", async () => {
@@ -194,7 +316,6 @@ test("app check: 假 autoUpdater 发现新版本 -> update-available", async () 
   const r = await m.check("app");
   assert.equal(r.status, "update-available");
   assert.equal(r.latest, "2.0.0");
-  // 回归：check 必须重置 autoDownload=false（apply 可能已置 true，否则后续 check 会静默下载）
   assert.equal(fakeUpdater.autoDownload, false);
 });
 
@@ -238,6 +359,90 @@ test("app apply: 有新版本 -> 下载并返回 update-downloaded", async () =>
   assert.equal(r.status, "update-downloaded");
   assert.equal(r.applied, true);
   assert.equal(downloaded, true);
+  assert.equal(fakeUpdater.autoDownload, false, "应关闭自动下载，避免与显式 downloadUpdate 重复");
+});
+
+test("profile check: 使用构造函数传入的 dshHome", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = require("node:fs");
+  const { join } = require("node:path");
+  const home = mkdtempSync(join(require("node:os").tmpdir(), "dsh-profile-home-"));
+  mkdirSync(join(home, "profiles", "web"), { recursive: true });
+  writeFileSync(join(home, "profiles", "web", "package.json"), JSON.stringify({
+    "dsh.profile.bundles": ["plugin-a"],
+    dependencies: { "plugin-a": "1.0.0" },
+  }));
+  const originalFetch = global.fetch;
+  global.fetch = async () => ({ ok: true, json: async () => ({ version: "2.0.0" }) });
+  try {
+    const manager = new UpgradeManager({ server: fakeServer("0.1.0"), dshHome: home });
+    const result = await manager.check("profile");
+    assert.equal(result.status, "update-available");
+    assert.equal(result.bundles[0].name, "plugin-a");
+  } finally {
+    global.fetch = originalFetch;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("profile check/apply: 损坏或非法 bundle 声明明确报错", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = require("node:fs");
+  const { join } = require("node:path");
+  const home = mkdtempSync(join(require("node:os").tmpdir(), "dsh-profile-invalid-"));
+  mkdirSync(join(home, "profiles", "web"), { recursive: true });
+  writeFileSync(join(home, "profiles", "web", "package.json"), JSON.stringify({
+    "dsh.profile.bundles": ["plugin-ok", "../../escape", 42],
+    dependencies: { "plugin-ok": "1.0.0" },
+  }));
+  try {
+    const manager = new UpgradeManager({ server: fakeServer("0.1.0"), dshHome: home });
+    const checked = await manager.check("profile");
+    assert.equal(checked.status, "error");
+    assert.match(checked.reason, /非法 bundle/);
+    const applied = await manager.apply("profile");
+    assert.equal(applied.status, "error");
+    assert.equal(applied.applied, false);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("profile apply: 更新成功后自动重启后端", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = require("node:fs");
+  const { join } = require("node:path");
+  const home = mkdtempSync(join(require("node:os").tmpdir(), "dsh-profile-apply-"));
+  mkdirSync(join(home, "profiles", "web"), { recursive: true });
+  writeFileSync(join(home, "profiles", "web", "package.json"), JSON.stringify({
+    "dsh.profile.bundles": ["plugin-a"], dependencies: { "plugin-a": "1.0.0" },
+  }));
+  let restartCount = 0;
+  const server = fakeServer("0.1.0");
+  server.restart = async () => { restartCount += 1; return { state: "running" }; };
+  try {
+    const manager = new UpgradeManager({
+      server,
+      dshHome: home,
+      dshCliRunner: () => ({ status: 0, stdout: "updated", stderr: "" }),
+    });
+    const result = await manager.apply("profile");
+    assert.equal(result.status, "up-to-date");
+    assert.equal(result.restarted, true);
+    assert.equal(restartCount, 1);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("apply: 同一升级轨道并发调用会被拒绝", async () => {
+  const manager = new UpgradeManager({ server: fakeServer("0.1.0") });
+  let release;
+  manager._applyApp = () => new Promise((resolve) => { release = resolve; });
+  const first = manager.apply("app");
+  await new Promise((resolve) => setImmediate(resolve));
+  const second = await manager.apply("app");
+  assert.equal(second.status, "error");
+  assert.match(second.reason, /正在进行/);
+  release({ track: "app", status: "up-to-date", applied: false });
+  await first;
 });
 
 test("未知轨道 -> status error", async () => {

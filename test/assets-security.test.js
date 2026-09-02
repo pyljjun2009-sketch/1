@@ -26,3 +26,12 @@ test("设置页不含可执行的内联事件属性", () => {
   assert.doesNotMatch(executable, /\sonclick\s*=/i);
   assert.doesNotMatch(executable, /<script(?![^>]*\bsrc=)[^>]*>/i);
 });
+
+test("设置页为三条升级轨道提供统一的安全操作入口", () => {
+  const js = readFileSync(join(__dirname, "..", "assets", "settings.js"), "utf8");
+  assert.match(js, /app:\s*"下载桌面应用更新"/);
+  assert.match(js, /backend:\s*"升级 DSH 后端"/);
+  assert.match(js, /profile:\s*"更新 Profile bundles"/);
+  assert.match(js, /data-action="apply-upgrade"/);
+  assert.match(js, /dsh\.upgrade\.apply\(track\)/);
+});

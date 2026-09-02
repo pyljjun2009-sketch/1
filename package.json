@@ -1,7 +1,7 @@
 {
   "name": "dsh-desktop",
-  "version": "0.1.0",
-  "description": "DeepSeek Harness 独立桌面端 —— 类似 Codex 的桌面 UI，内嵌 dsh web 后端，预留应用自升级与后端升级接口，DSH 本体零改动。",
+  "version": "0.1.2",
+  "description": "DeepSeek Harness 独立桌面端 —— 类似 Codex 的桌面 UI，托管 dsh web 后端，提供应用、后端与 Profile 三轨升级，DSH 本体零改动。",
   "main": "src/main/index.js",
   "author": "DSH Desktop Contributors",
   "license": "MIT",
@@ -18,17 +18,22 @@
     "test:syntax": "node scripts/check-syntax.js",
     "test:smoke": "set DSH_DESKTOP_SMOKE=1&& set DSH_DESKTOP_DEBUG=1&& set DSH_DESKTOP_USER_DATA=%TEMP%\\dsh-desktop-smoke&& electron .",
     "test:smoke:fixture": "set DSH_DESKTOP_SMOKE=1&& set DSH_DESKTOP_DEBUG=1&& set DSH_DESKTOP_USER_DATA=%TEMP%\\dsh-desktop-smoke-fixture&& node scripts/init-smoke-settings.js&& electron .",
-    "test:package": "set DSH_DESKTOP_BUILD_DIR=dist-test&& node scripts/build.js --dir&& node scripts/verify-build.js dist-test/win-unpacked",
+    "test:package": "set DSH_DESKTOP_BUILD_DIR=dist-test&& set DSH_DESKTOP_SKIP_SHORTCUT=1&& node scripts/build.js --dir&& node scripts/verify-build.js dist-test/win-unpacked",
+    "verify": "node scripts/verify-project.js",
+    "verify:local": "node scripts/verify-project.js --real-dsh",
+    "test:update": "node --test test/updater.test.js test/app-update-integration.test.js",
+    "verify:release": "node scripts/verify-release.js",
     "clean": "node scripts/clean.js",
     "pack": "node scripts/build.js --dir",
     "dist": "node scripts/build.js --win",
     "dist:portable": "node scripts/build.js --win portable"
   },
   "dependencies": {
-    "electron-updater": "^6.8.9"
+    "electron-updater": "^6.8.9",
+    "semver": "^7.8.5"
   },
   "devDependencies": {
-    "electron": "^43.4.0",
+    "electron": "^43.5.1",
     "electron-builder": "^26.15.3"
   }
 }

@@ -10,28 +10,27 @@ const { settings } = require("./config.js");
 const { denyPermissions } = require("./window.js");
 const { runDshCli } = require("./updater.js");
 const CH = require("../shared/channels.js");
+const { fileURLToPath } = require("node:url");
+const { resolve } = require("node:path");
 
 /** 渲染进程禁止通过 IPC 修改的字段（可执行注入面）。 */
 const IPC_RESTRICTED_FIELDS = ["dshCommand", "nodeBin"];
 /** 本应用 settings.html 的真实绝对路径（用于身份校验）。 */
-const SETTINGS_PAGE_PATH = require("node:path").join(__dirname, "..", "..", "assets", "settings.html").replace(/\\/g, "/");
+const SETTINGS_PAGE_PATH = require("node:path").join(__dirname, "..", "..", "assets", "settings.html");
 
 /** 只有本地设置页可调用会改变配置、文件或依赖的管理通道。 */
 function assertSettingsPage(event) {
   const url = event?.senderFrame?.url;
-  // 无 senderFrame（测试环境直接调用 IPC）时放行；生产环境的安全边界由 preload 沙箱保证
-  if (typeof url !== "string") return;
-  if (!url.startsWith("file:")) {
+  // 身份信息缺失时必须拒绝（fail closed）；测试也应提供与生产一致的 senderFrame。
+  if (typeof url !== "string" || !url.startsWith("file:")) {
     throw new Error("此管理操作只能从本地设置页发起");
   }
-  // 解析 file: URL 的 pathname，去掉前导 / 后与本应用 settings.html 路径比较（防路径穿越）
-  let pathname;
-  try { pathname = new URL(url).pathname; } catch { throw new Error("无效的页面 URL"); }
-  // 两者统一为正斜杠后比较（URL pathname 固定正斜杠，path.join 在 Windows 输出反斜杠）
-  const normalizedPath = pathname.split("\\").join("/").replace(/^\/+/, "");
-  const normalizedExpected = SETTINGS_PAGE_PATH.split("\\").join("/");
-  if (normalizedPath.toLowerCase() !== normalizedExpected.toLowerCase()) {
-    console.error("[assertSettingsPage] url=", url, "normalized=", normalizedPath, "expected=", normalizedExpected);
+  // fileURLToPath 会正确解码安装路径中的空格/中文，并拒绝畸形 file URL。
+  let actualPath;
+  try { actualPath = resolve(fileURLToPath(url)); } catch { throw new Error("无效的页面 URL"); }
+  const expectedPath = resolve(SETTINGS_PAGE_PATH);
+  if (actualPath.toLowerCase() !== expectedPath.toLowerCase()) {
+    console.error("[assertSettingsPage] url=", url, "actual=", actualPath, "expected=", expectedPath);
     throw new Error("此管理操作只能从本地设置页发起");
   }
 }
@@ -56,7 +55,7 @@ function safeSend(win, channel, payload) {
   }
 }
 
-function registerIpc({ server, getWindow, upgradeManager, backupManager, crashRecovery, ipc = ipcMain, appApi = app, shellApi = shell }) {
+function registerIpc({ server, getWindow, upgradeManager, backupManager, crashRecovery, ipc = ipcMain, appApi = app, shellApi = shell, runDshCliApi = runDshCli, getUpgradeWindows = () => require("electron").BrowserWindow?.getAllWindows?.() || [] }) {
   ipc.handle(CH.STATUS, () => server.status());
 
   ipc.handle(CH.RESTART, async () => {
@@ -150,6 +149,10 @@ function registerIpc({ server, getWindow, upgradeManager, backupManager, crashRe
     assertSettingsPage(event);
     return upgradeManager.apply(track, targetVersion);
   });
+  ipc.handle(CH.UPGRADE_INSTALL, (event) => {
+    assertSettingsPage(event);
+    return upgradeManager.installApp();
+  });
 
   // 备份/恢复
   ipc.handle(CH.BACKUP_CREATE, (event, note) => {
@@ -158,7 +161,41 @@ function registerIpc({ server, getWindow, upgradeManager, backupManager, crashRe
     return backupManager.create(note || null);
   });
   ipc.handle(CH.BACKUP_LIST, (event) => { assertSettingsPage(event); return backupManager.list(); });
-  ipc.handle(CH.BACKUP_RESTORE, (event, id) => { assertSettingsPage(event); return backupManager.restore(id); });
+  ipc.handle(CH.BACKUP_RESTORE, async (event, id) => {
+    assertSettingsPage(event);
+    const wasActive = ["running", "starting", "restarting"].includes(server.state);
+    if (wasActive) {
+      const stopped = await server.stop();
+      if (stopped.state === "error") {
+        throw new Error(`无法安全恢复备份：后端停止失败（${stopped.error || "未知错误"}）`);
+      }
+    }
+
+    let restored;
+    try {
+      restored = backupManager.restore(id);
+      let resynced = null;
+      if (wasActive) {
+        const sync = runDshCliApi(server, ["plugin", "--profile", "web", "install"], { timeout: 300_000, stdio: "pipe" });
+        resynced = sync.status === 0;
+        if (!resynced) {
+          const output = ((sync.stdout || "") + (sync.stderr || "")).slice(-500);
+          throw new Error(`备份已恢复，但 Profile 依赖同步失败：${output || `exit=${sync.status}`}`);
+        }
+        const started = await server.start();
+        if (started.state !== "running") {
+          throw new Error(`备份已恢复，但后端重新启动失败：${started.error || started.state}`);
+        }
+      }
+      return { ...restored, resynced, restarted: wasActive };
+    } catch (err) {
+      // 恢复/同步失败时尽力让先前正在运行的后端重新可用；原错误仍返回给用户。
+      if (wasActive && server.state !== "running") {
+        try { await server.start(); } catch { /* 保留原错误 */ }
+      }
+      throw err;
+    }
+  });
   ipc.handle(CH.BACKUP_DIFF, (event, id) => { assertSettingsPage(event); return backupManager.diff(id); });
   ipc.handle(CH.BACKUP_DELETE, (event, id) => { assertSettingsPage(event); return backupManager.delete(id); });
 
@@ -191,7 +228,7 @@ function registerIpc({ server, getWindow, upgradeManager, backupManager, crashRe
     // 修复插件依赖不一致：执行 dsh plugin install 统一 package.json/lock/node_modules 状态
     const { DshServer } = require("./dsh-server.js");
     try {
-      const r = runDshCli(new DshServer(), ["plugin", "--profile", "web", "install"], { timeout: 180_000 });
+      const r = runDshCliApi(new DshServer(), ["plugin", "--profile", "web", "install"], { timeout: 180_000 });
       const success = r.status === 0;
       return {
         resync: success,
@@ -222,7 +259,15 @@ function registerIpc({ server, getWindow, upgradeManager, backupManager, crashRe
   });
 
   // 主进程 -> 渲染进程事件推送（窗口销毁竞态安全）
-  const sink = (payload) => safeSend(getWindow(), CH.UPGRADE_EVENT, payload);
+  const sink = (payload) => {
+    const main = getWindow();
+    safeSend(main, CH.UPGRADE_EVENT, payload);
+    for (const win of getUpgradeWindows()) {
+      if (win === main || win.isDestroyed()) continue;
+      try { assertSettingsPage({ senderFrame: { url: win.webContents.getURL() } }); } catch { continue; }
+      safeSend(win, CH.UPGRADE_EVENT, payload);
+    }
+  };
   upgradeManager.setEventSink(sink);
 
   server.on("status", (s) => safeSend(getWindow(), CH.STATUS_EVENT, s));

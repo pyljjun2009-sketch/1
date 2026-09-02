@@ -16,6 +16,7 @@ module.exports = {
   RELOAD_WINDOW: "window:reload",
   UPGRADE_CHECK: "upgrade:check",
   UPGRADE_APPLY: "upgrade:apply",
+  UPGRADE_INSTALL: "upgrade:install-app",
 
   /** 备份/恢复 */
   BACKUP_CREATE: "backup:create",

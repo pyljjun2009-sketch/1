@@ -65,6 +65,30 @@ test("findFreePort: 首选端口被占用时回退到 OS 分配", async () => {
   }
 });
 
+test("findFreePort: 超时时同时关闭首选与回退监听器", async () => {
+  const created = [];
+  const netApi = {
+    createServer() {
+      const server = {
+        closed: false,
+        handlers: {},
+        unref() {},
+        on(event, fn) { this.handlers[event] = fn; },
+        listen() {
+          if (created.length === 1) queueMicrotask(() => this.handlers.error(new Error("occupied")));
+          // 第二个监听器故意挂起，交给超时清理。
+        },
+        close(cb) { this.closed = true; if (cb) cb(); },
+      };
+      created.push(server);
+      return server;
+    },
+  };
+  await assert.rejects(findFreePort(3080, "127.0.0.1", { netApi, timeoutMs: 20 }), /超时/);
+  assert.equal(created.length, 2);
+  assert.ok(created.every((server) => server.closed), "两个监听器都应在超时后关闭");
+});
+
 test("_resolveLaunch: 使用 settings.dshCommand 自定义命令", () => {
   settings.set({ dshCommand: ["C:\\node.exe", "C:\\dsh\\lib\\bin.js", "web"] });
   const server = new DshServer();
@@ -312,6 +336,25 @@ test("_checkProfileBundles: 检测 bundle 声明与 node_modules 不一致", () 
   const missing = server._checkProfileBundles(dshHome);
   assert.deepEqual(missing, ["@linxin666/dsh-ssh"]);
 
+  rmSync(dshHome, { recursive: true, force: true });
+});
+
+test("_checkProfileBundles/_checkProfileHealth: 非法 bundle 声明不会路径逃逸或崩溃", () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = require("node:fs");
+  const dshHome = mkdtempSync(join(tmpdir(), "dsh-bundle-invalid-"));
+  const profileDir = join(dshHome, "profiles", "web");
+  mkdirSync(profileDir, { recursive: true });
+  writeFileSync(join(profileDir, "package.json"), JSON.stringify({
+    "dsh.profile.bundles": ["../../escape", 42],
+    dependencies: {},
+  }));
+  const server = new DshServer();
+  const missing = server._checkProfileBundles(dshHome);
+  assert.equal(missing.length, 2);
+  assert.ok(missing.every((item) => item.includes("非法 bundle")));
+  const health = server._checkProfileHealth(dshHome);
+  assert.equal(health.healthy, false);
+  assert.equal(health.issues.filter((issue) => issue.check === "bundle-name").length, 2);
   rmSync(dshHome, { recursive: true, force: true });
 });
 

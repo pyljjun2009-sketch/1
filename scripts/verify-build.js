@@ -19,6 +19,21 @@ if (!existsSync(asarPath)) {
   process.exit(1);
 }
 console.log("[dsh-build-verify] OK: 构建目录和 asar 存在");
+const configPath = join(distDir, "resources", "app-update.yml");
+if (existsSync(configPath)) {
+  const updateConfig = require("js-yaml").load(require("node:fs").readFileSync(configPath, "utf8"));
+  require("node:assert/strict").deepEqual(
+    [updateConfig.provider, updateConfig.owner, String(updateConfig.repo)],
+    ["github", "pyljjun2009-sketch", "1"],
+    "打包更新源必须与项目公开仓库一致"
+  );
+  console.log("[dsh-build-verify] OK: GitHub 更新源已嵌入安装包");
+} else if (process.argv.includes("--require-update-config")) {
+  throw new Error("正式安装版缺少 app-update.yml");
+} else {
+  // electron-builder --dir 不执行 NSIS target，因此不生成更新配置。
+  console.log("[dsh-build-verify] INFO: 仅解包构建不生成更新配置；正式版请加 --require-update-config");
+}
 
 // 直接用 @electron/asar API 读取内容
 const asar = require("@electron/asar");

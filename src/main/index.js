@@ -143,6 +143,13 @@ if (!gotLock) {
       server,
       backupManager,
       dshHome: process.env.DSH_HOME || join(require("os").homedir(), ".dsh"),
+      canInstallApp: app.isPackaged && fs.existsSync(join(path.dirname(process.execPath), "Uninstall DeepSeek Harness Desktop.exe")),
+      prepareAppInstall: async () => {
+        backupManager.create("桌面应用升级前自动备份");
+        const stopped = await server.stop();
+        if (stopped.state !== "stopped") throw new Error(stopped.error || "后端尚未安全停止");
+        if (crashRecovery) crashRecovery.markCleanExit();
+      },
     });
     crashRecovery = new CrashRecovery({
       userDataDir: app.getPath("userData"),
@@ -181,12 +188,12 @@ if (!gotLock) {
         settingsWin.once("ready-to-show", () => settingsWin.show());
       },
       checkUpgrades: async () => {
-        // 帮助菜单"升级状态"：诚实展示两条轨道的当前能力
+        // 帮助菜单"升级状态"：展示应用、后端与 Profile 三条升级轨道
         const { dialog } = require("electron");
-        const appResult = await upgradeManager.check("app");
-        const backendResult = await upgradeManager.check("backend");
+        const results = await Promise.all(["app", "backend", "profile"].map((track) => upgradeManager.check(track)));
+        const trackLabels = { app: "桌面应用", backend: "DSH 后端", profile: "Profile bundles" };
         const fmt = (r) =>
-          `${r.track === "app" ? "桌面应用" : "DSH 后端"}：${r.status}${
+          `${trackLabels[r.track] || r.track}：${r.status}${
             r.status === "update-available" && r.latest ? `（${r.current} → ${r.latest}）` : ""
           }${r.message ? `\n    ${r.message}` : ""}${r.reason ? `\n    原因: ${r.reason}` : ""}${
             r.hint ? `\n    指引: ${r.hint}` : ""
@@ -195,7 +202,7 @@ if (!gotLock) {
           type: "info",
           title: "升级状态",
           message: "升级能力状态",
-          detail: [fmt(appResult), fmt(backendResult), "", "注意：后端轨道当前仅支持检测，一键升级尚未实现（预留接口）。"].join("\n"),
+          detail: results.map(fmt).join("\n\n"),
         });
       },
     });
@@ -208,6 +215,16 @@ if (!gotLock) {
       mainWindow = null;
     });
     dbg("whenReady: window created");
+    if (process.env.DSH_DESKTOP_SMOKE !== "1") {
+      // 应用更新检查不依赖后端能否启动，网络失败不阻断工作。
+      void upgradeManager.check("app").then((result) => {
+        if (result.status !== "update-available" || !mainWindow || mainWindow.isDestroyed()) return;
+        return require("electron").dialog.showMessageBox(mainWindow, {
+          type: "info", title: "桌面应用更新可用", message: result.message,
+          detail: "请保存工作，然后打开设置 → 升级管理，下载更新并确认重启安装。", buttons: ["知道了"],
+        });
+      }).catch((err) => dbg(`app update check failed: ${err.message}`));
+    }
 
     // 冒烟模式：后端就绪 + 页面加载两个独立断言
     if (process.env.DSH_DESKTOP_SMOKE === "1") {
@@ -331,7 +348,7 @@ if (!gotLock) {
       const result = await upgradeManager.check("backend");
       if (result.status !== "update-available" || !result.latest) return;
       const { dialog } = require("electron");
-      // win 可能为 null（keepBackendRunning 关窗后后端常开）：改用无窗口对话框，避免参数解析异常
+      // keepBackendRunning 模式下窗口可能已关闭，此时使用无窗口对话框。
       const showBox = (options) =>
         win && !win.isDestroyed() ? dialog.showMessageBox(win, options) : dialog.showMessageBox(options);
       const choice = await showBox({

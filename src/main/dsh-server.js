@@ -17,6 +17,7 @@ const { join } = require("node:path");
 const net = require("node:net");
 const { EventEmitter } = require("node:events");
 const { settings } = require("./config.js");
+const { isSafePackageName } = require("./updater.js");
 
 const READY_TIMEOUT_MS = 90_000;
 const LOG_TAIL_LINES = 200;
@@ -35,23 +36,28 @@ function httpUrl(host, port) {
 }
 
 /** 找一个空闲端口：优先使用首选端口，否则由 OS 分配。整体加 10s 超时兜底。 */
-function findFreePort(preferred, host) {
+function findFreePort(preferred, host, { netApi = net, timeoutMs = 10_000 } = {}) {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    let srv2 = null;
+    const srv = netApi.createServer();
     const timer = setTimeout(() => {
       try { srv.close(); } catch { /* 忽略 */ }
-      try { srv2.close(); } catch { /* 忽略 */ }
-      reject(new Error("端口分配超时"));
-    }, 10_000);
+      try { srv2?.close(); } catch { /* 忽略 */ }
+      done(new Error("端口分配超时"));
+    }, timeoutMs);
     const done = (err, port) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       if (err) reject(err);
       else resolve(port);
     };
-    const srv = net.createServer();
     srv.unref();
     srv.on("error", () => {
+      if (settled) return;
       // 首选端口被占用：让 OS 分配
-      const srv2 = net.createServer();
+      srv2 = netApi.createServer();
       srv2.unref();
       srv2.on("error", (e) => done(e));
       srv2.listen(0, host, () => {
@@ -504,8 +510,13 @@ class DshServer extends EventEmitter {
     try {
       const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
       const bundles = pkg["dsh.profile.bundles"] || [];
+      if (!Array.isArray(bundles)) return ["dsh.profile.bundles（格式非法：应为数组）"];
       const missing = [];
       for (const b of bundles) {
+        if (!isSafePackageName(b)) {
+          missing.push(`非法 bundle 声明: ${String(b)}`);
+          continue;
+        }
         // 官方基础 bundle 从 dsh 安装目录解析，其余从 profile node_modules 解析
         const isOfficial = b.startsWith("@deepseek-ai/dsh-");
         if (isOfficial) continue;
@@ -547,10 +558,26 @@ class DshServer extends EventEmitter {
     }
 
     const bundles = pkg["dsh.profile.bundles"] || [];
-    const deps = pkg.dependencies || {};
+    const deps = pkg.dependencies && typeof pkg.dependencies === "object" && !Array.isArray(pkg.dependencies)
+      ? pkg.dependencies
+      : {};
+    if (!Array.isArray(bundles)) {
+      issues.push({ level: "error", check: "bundles", msg: "dsh.profile.bundles 必须是数组" });
+      return {
+        healthy: false, issues, profileDir,
+        hasPackageJson: true,
+        hasLock: fs.existsSync(lockPath),
+        hasPatch: fs.existsSync(patchPath),
+        hasNodeModules: fs.existsSync(nmDir),
+      };
+    }
 
     // 2. bundle 声明与 node_modules 一致性
     for (const b of bundles) {
+      if (!isSafePackageName(b)) {
+        issues.push({ level: "error", check: "bundle-name", pkg: String(b), msg: `非法 bundle 声明：${String(b)}` });
+        continue;
+      }
       if (b.startsWith("@deepseek-ai/dsh-")) continue;
       const dir = join(profileDir, "node_modules", ...b.split("/"));
       if (!fs.existsSync(dir)) {

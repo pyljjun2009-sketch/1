@@ -20,7 +20,7 @@
 
 ## 环境要求
 
-- Node.js ≥ 20（系统内需有 `node`，用于启动 dsh 后端）
+- 桌面端开发依赖 Node.js ≥ 22.12；系统内还需有兼容 DSH 的 `node`，用于启动后端
 - 已安装 DeepSeek Harness CLI：`npm i -g @deepseek-ai/dsh`（桌面端会自动探测 npm 全局安装位置）
 
 ## 安装与运行
@@ -41,13 +41,17 @@ npm run start:safe   # 安全模式（等同 --safe-mode，强制 inprocess GPU�
 ## 测试与质量
 
 ```bash
-npm test                  # 全部单元测试（71 个用例）
+npm test                  # 全部测试（125 个用例，含真实 HTTP 升级校验）
 npm run test:unit         # 配置/升级/IPC 快速单测
 npm run test:process      # Windows 进程树与停止确认（dsh-server）
-npm run test:syntax       # 全部 JS 语法检查（27 个文件，含本地页面脚本）
+npm run test:syntax       # 全部 JS 语法检查（33 个文件，含本地页面脚本）
 npm run test:smoke        # 冒烟（真实 dsh，依赖本机全局安装）
 npm run test:smoke:fixture# 冒烟（内置假 DSH fixture，CI 可用，不依赖本机 dsh）
-npm run test:package      # 解包构建 + ASAR 内容验证（15 个关键文件）
+npm run test:package      # 解包构建 + ASAR 内容验证（18 个关键文件）
+npm run verify            # 一键验收：单测/语法/审计/模拟冒烟/解包
+npm run verify:local      # 一键验收，并额外验证本机真实 DSH
+npm run test:update       # 升级检查/下载/校验/安装保护专项测试，不执行安装器
+npm run verify:release    # 校验最新安装包文件名、大小、SHA-512 与 blockmap
 npm run clean             # 清理 dist/、dist-test/、dist-review/
 ```
 
@@ -74,16 +78,20 @@ npm run pack              # 仅解包目录（快速验证）
 ```
 
 - 输出目录自动选择（`scripts/build.js` 内置逻辑）：
-  - **A/B 双目录交替**：`%LOCALAPPDATA%\dsh-desktop-build-a` / `-b`——运行中的实例在 A 时构建到 B，反之亦然，**永不因 exe 占用而 EBUSY**
+  - **A/B 双目录交替**：`D:\AI\DSH\artifacts\dsh-desktop-build-a` / `-b`——运行中的实例在 A 时构建到 B，反之亦然，**永不因 exe 占用而 EBUSY**
+  - 安装包、便携版、blockmap 和 `latest.yml` 自动汇总到 `D:\AI\DSH\release`
   - 构建后自动更新桌面快捷方式指向最新版
   - 可用环境变量 `DSH_DESKTOP_BUILD_DIR` 显式指定单目录覆盖：
 
   ```bash
-  set DSH_DESKTOP_BUILD_DIR=D:\build\dsh-desktop&& npm run dist
+  set DSH_DESKTOP_BUILD_DIR=D:\AI\DSH\artifacts\custom&& npm run dist
   ```
 
 - 两个目录都被占用（两个实例同时在跑）时会提示关闭一个。
-- 本仓库位于 `D:\AI\DSHarness`（非 OneDrive 同步目录，避免同步文件锁）；构建产物输出到 `%LOCALAPPDATA%\dsh-desktop-build-a/-b`，同样避开同步目录。
+- 项目源码、构建产物和安装包都位于 `D:\AI\DSH`；应用运行时配置、Profile 与备份仍使用下文列出的系统用户目录。
+- 当前本地正式安装包：`D:\AI\DSH\release\DeepSeek-Harness-Desktop-0.1.2-x64.exe`
+- 当前本地便携版：`D:\AI\DSH\release\DeepSeek-Harness-Desktop-0.1.2-portable.exe`
+- v0.1.2 安装版已接入项目 GitHub Releases。旧版首次需手动安装；之后在设置 → 升级管理下载并确认重启安装。便携版与解包目录不支持自动替换。详见 `docs/RELEASE-0.1.2.md`。
 
 ## 配置
 
@@ -135,7 +143,7 @@ npm run pack              # 仅解包目录（快速验证）
 ## 目录结构
 
 ```
-D:\AI\DSHarness/
+D:\AI\DSH/
 ├─ src/
 │  ├─ main/            # 主进程
 │  │  ├─ index.js      # 入口（GPU 策略、单实例、冒烟协议、退出清理）
@@ -151,7 +159,7 @@ D:\AI\DSHarness/
 │  │  ├─ preload.js        # 最小权限桥接（DSH 页面/加载页用）
 │  │  └─ preload-settings.js  # 完整管理权限桥接（设置页专用）
 │  └─ shared/channels.js   # IPC 通道名
-├─ test/               # node:test 单元测试（76 个用例）
+├─ test/               # node:test 测试（125 个用例）
 ├─ scripts/            # check-syntax / clean / build / init-smoke-settings / verify-build
 ├─ docs/adr/           # 架构决策记录（ADR-001/002）
 ├─ assets/             # 图标、加载页/设置页及受 CSP 保护的页面脚本
@@ -174,4 +182,4 @@ $env:DSH_DESKTOP_USER_DATA = "D:\tmp\dsh"; npm start   # 覆盖数据目录（�
 - **"dsh 后端意外退出"**：加载页会显示完整诊断（命令、cwd、bin 路径、日志尾部）；先确认 `npm i -g @deepseek-ai/dsh` 与 node 可用，或检查 `settings.json` 的 `dshCommand`/`nodeBin`。
 - **端口冲突**：默认自动挑选空闲端口，不会与已在运行的 `dsh web`（如 3080）冲突。
 - **升级 DSH 后端**：终端执行 `npm i -g @deepseek-ai/dsh@latest`，然后在应用内"文件 → 重新启动 DSH 后端"。
-- **升级状态**：帮助菜单 → "升级状态" 可查看两条轨道的当前能力（应用自升级需配置发布源；后端轨道当前仅检测）。
+- **升级状态**：帮助菜单 → "升级状态" 可查看三条轨道；v0.1.2 NSIS 安装版已绑定项目 GitHub 更新源，下载完成后在设置页确认重启安装。远端必须发布更高的正式版本，才会提示应用更新。

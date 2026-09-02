@@ -3,6 +3,8 @@ dist/
 dist-audit/
 dist-test/
 dist-review/
+artifacts/
+release/
 *.log
 .DS_Store
 *.exe

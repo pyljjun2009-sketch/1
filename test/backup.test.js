@@ -35,6 +35,23 @@ test("create: 创建备份包含所有关键文件", () => {
   assert.ok(existsSync(join(backupDir, m.id, "profiles-web", "package.json")));
 });
 
+test("create: manifest 与写入文件来自同一份快照", () => {
+  const { backupDir, dshHome } = setup();
+  const bm = new BackupManager({ backupDir, dshHome });
+  let snapshots = 0;
+  bm._snapshot = () => {
+    snapshots += 1;
+    return { "package.json": snapshots === 1 ? '{"value":1}' : '{"value":2}' };
+  };
+  const manifest = bm.create("single-snapshot");
+  const stored = readFileSync(join(backupDir, manifest.id, "profiles-web", "package.json"), "utf8");
+  assert.equal(snapshots, 1);
+  assert.equal(stored, '{"value":1}');
+  assert.equal(manifest.hashes["package.json"], bm._hash(stored));
+  rmSync(backupDir, { recursive: true, force: true });
+  rmSync(dshHome, { recursive: true, force: true });
+});
+
 test("list: 返回备份列表（按时间倒序）", () => {
   const { backupDir, dshHome } = setup();
   const bm = new BackupManager({ backupDir, dshHome });
@@ -93,6 +110,36 @@ test("restore: 清理 node_modules 残留（bundle 一致性回归）", () => {
   assert.ok(!existsSync(join(profiles, "node_modules")), "恢复后 node_modules 应被清理");
 });
 
+test("restore: 文件被篡改时拒绝恢复且不改动当前 Profile", () => {
+  const { backupDir, dshHome } = setup();
+  const bm = new BackupManager({ backupDir, dshHome });
+  const manifest = bm.create("integrity");
+  writeFileSync(join(backupDir, manifest.id, "profiles-web", "package.json"), '{"tampered":true}');
+  const currentPath = join(dshHome, "profiles", "web", "package.json");
+  writeFileSync(currentPath, '{"current":true}');
+  assert.throws(() => bm.restore(manifest.id), /完整性校验失败/);
+  assert.deepEqual(JSON.parse(readFileSync(currentPath, "utf8")), { current: true });
+  assert.equal(bm.list().length, 1, "校验失败发生在创建恢复前备份之前");
+  rmSync(backupDir, { recursive: true, force: true });
+  rmSync(dshHome, { recursive: true, force: true });
+});
+
+test("restore/diff: 备份时不存在的 settings.yaml 能检测新增并恢复为不存在", () => {
+  const { backupDir, dshHome } = setup();
+  rmSync(join(dshHome, "settings.yaml"), { force: true });
+  const bm = new BackupManager({ backupDir, dshHome });
+  const manifest = bm.create("without-settings");
+  const settingsPath = join(dshHome, "settings.yaml");
+  writeFileSync(settingsPath, "new: value");
+  const difference = bm.diff(manifest.id);
+  assert.equal(difference.identical, false);
+  assert.ok(difference.diffs[".settings.yaml"]);
+  bm.restore(manifest.id);
+  assert.equal(existsSync(settingsPath), false);
+  rmSync(backupDir, { recursive: true, force: true });
+  rmSync(dshHome, { recursive: true, force: true });
+});
+
 test("diff: 对比当前与备份", () => {
   const { backupDir, dshHome } = setup();
   const bm = new BackupManager({ backupDir, dshHome });
@@ -136,6 +183,18 @@ test("cleanup: 超过 MAX_BACKUPS 自动清理最旧", () => {
   const bm = new BackupManager({ backupDir, dshHome });
   for (let i = 0; i < 12; i++) bm.create(`backup-${i}`);
   assert.equal(bm.list().length, 10); // 10 保留
+});
+
+test("list/cleanup: 忽略不符合备份 ID 规则的目录", () => {
+  const { backupDir, dshHome } = setup();
+  mkdirSync(join(backupDir, "not_a_backup"), { recursive: true });
+  writeFileSync(join(backupDir, "not_a_backup", "manifest.json"), "{}");
+  const bm = new BackupManager({ backupDir, dshHome });
+  for (let i = 0; i < 11; i++) bm.create(`valid-${i}`);
+  assert.equal(bm.list().length, 10);
+  assert.ok(existsSync(join(backupDir, "not_a_backup")), "无关目录不应被清理逻辑删除");
+  rmSync(backupDir, { recursive: true, force: true });
+  rmSync(dshHome, { recursive: true, force: true });
 });
 
 test("创建无 profiles/web 目录时仍能创建备份", () => {

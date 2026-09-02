@@ -1,5 +1,5 @@
 /**
- * 升级接口（预留）—— 两条升级轨道，结果一律带显式状态枚举：
+ * 升级接口—— 三条升级轨道，结果一律带显式状态枚举：
  *
  *  track = "app"      桌面应用自升级（electron-updater）。
  *                      已内置 electron-updater 依赖；当且仅当打包产物配置了
@@ -8,6 +8,7 @@
  *  track = "backend"  DSH 后端（npm 包 @deepseek-ai/dsh）升级。
  *                      check() 已实现：对比本地版本与 npm registry 最新版。
  *                      apply() 已实现安全升级：备份、安装、校验、同步依赖并重启。
+ *  track = "profile"  Profile bundle 依赖检查与更新；成功后自动重启后端。
  *
  * 状态枚举（status）：
  *   not-configured    接口可用但未配置（无发布源 / electron-updater 不可用）
@@ -20,6 +21,12 @@
  */
 const { EventEmitter } = require("node:events");
 const { spawnSync } = require("node:child_process");
+const semver = require("semver");
+
+/** 只把更高的合法语义版本视为更新，绝不把旧发布当成升级。 */
+function isNewerVersion(latest, current) {
+  return Boolean(semver.valid(latest) && semver.valid(current) && semver.gt(latest, current));
+}
 
 const NPM_REGISTRY = "https://registry.npmjs.org/@deepseek-ai/dsh/latest";
 const BACKEND_PACKAGE = "@deepseek-ai/dsh";
@@ -149,6 +156,13 @@ const BACKEND_UPGRADER = {
         hint: `请运行 "npm install -g ${BACKEND_PACKAGE}@${newVersion}" 重装，或回滚备份 ${backupId}`,
       };
     }
+    if (targetVersion && String(newVersion || "").replace(/^v/, "") !== targetVersion.replace(/^v/, "")) {
+      return {
+        applied: true, status: "error", version: newVersion, backupId,
+        reason: `DSH 安装完成，但实际版本 ${newVersion || "unknown"} 与目标版本 ${targetVersion} 不一致`,
+        hint: `请重新安装 ${BACKEND_PACKAGE}@${targetVersion}，或使用备份 ${backupId} 回滚 Profile`,
+      };
+    }
 
     // ---- 4. 升级后修复 profile 一致性（防止 bundle 不匹配导致无法启动） ----
     let resynced = null;
@@ -180,15 +194,23 @@ const BACKEND_UPGRADER = {
 };
 
 class UpgradeManager extends EventEmitter {
-  constructor({ server, appUpdaterLoader, backupManager, dshHome } = {}) {
+  constructor({ server, appUpdaterLoader, backupManager, dshHome, dshCliRunner, prepareAppInstall, canInstallApp = true, isPortable = Boolean(process.env.PORTABLE_EXECUTABLE_FILE || process.env.PORTABLE_EXECUTABLE_DIR) } = {}) {
     super();
     this.server = server;
     this.backupManager = backupManager;
     this.dshHome = dshHome;
     this._appUpdaterEventsWired = false;
+    this._inFlightTracks = new Set();
+    this._runDshCli = dshCliRunner || runDshCli;
+    this._prepareAppInstall = prepareAppInstall;
+    this._isPortable = isPortable;
+    this._canInstallApp = canInstallApp;
+    this._appDownload = null;
+    this._appCheckPromise = null;
+    this._installing = false;
     // 可注入的 appUpdater 加载器（测试用）；默认动态导入 electron-updater
     this._appUpdaterLoader =
-      appUpdaterLoader || (async () => (await import("electron-updater")).autoUpdater);
+      appUpdaterLoader || (async () => require("electron-updater").autoUpdater);
   }
 
   /** 主进程需要把事件推给渲染进程时设置此回调。 */
@@ -209,10 +231,21 @@ class UpgradeManager extends EventEmitter {
   }
 
   async apply(track, targetVersion) {
-    if (track === "backend") return this._applyBackend(targetVersion);
-    if (track === "app") return this._applyApp();
-    if (track === "profile") return this._applyProfile(targetVersion);
-    return { track, status: "error", applied: false, reason: `未知升级轨道: ${track}` };
+    if (this._installing) return { track, status: "error", applied: false, reason: "桌面应用正在准备安装，请勿执行其他更新" };
+    if (!["backend", "app", "profile"].includes(track)) {
+      return { track, status: "error", applied: false, reason: `未知升级轨道: ${track}` };
+    }
+    if (this._inFlightTracks.has(track)) {
+      return { track, status: "error", applied: false, reason: `${track} 升级正在进行，请勿重复操作` };
+    }
+    this._inFlightTracks.add(track);
+    try {
+      if (track === "backend") return await this._applyBackend(targetVersion);
+      if (track === "app") return await this._applyApp();
+      return await this._applyProfile(targetVersion);
+    } finally {
+      this._inFlightTracks.delete(track);
+    }
   }
 
   // ---- 后端轨道 --------------------------------------------------------
@@ -224,7 +257,9 @@ class UpgradeManager extends EventEmitter {
       if (!res.ok) throw new Error(`registry HTTP ${res.status}`);
       const meta = await res.json();
       const latest = typeof meta.version === "string" ? meta.version : null;
-      const available = Boolean(latest) && latest !== current;
+      if (!latest || !isSafeVersion(latest)) throw new Error("registry 返回了无效版本号");
+      if (!semver.valid(current)) throw new Error("当前后端版本无法识别，无法安全比较版本");
+      const available = isNewerVersion(latest, current);
       this._emit("backend-check", { current, latest, available });
       return {
         track: "backend",
@@ -268,8 +303,10 @@ class UpgradeManager extends EventEmitter {
 
   async _loadAppUpdater() {
     try {
+      if (this._appUpdater) return this._appUpdater;
       const autoUpdater = await this._appUpdaterLoader();
       if (!autoUpdater || typeof autoUpdater.checkForUpdates !== "function") return null;
+      this._appUpdater = autoUpdater;
       return autoUpdater;
     } catch {
       return null;
@@ -280,14 +317,37 @@ class UpgradeManager extends EventEmitter {
     if (this._appUpdaterEventsWired) return;
     this._appUpdaterEventsWired = true;
     autoUpdater.autoDownload = false;
+    // 使用已安装的 electron-updater 6.x API；只在用户明确确认时安装。
+    autoUpdater.autoInstallOnAppQuit = false;
+    autoUpdater.allowDowngrade = false;
+    autoUpdater.allowPrerelease = false;
+    autoUpdater.disableWebInstaller = true;
     for (const type of ["checking-for-update", "update-available", "update-not-available", "error", "download-progress", "update-downloaded"]) {
       autoUpdater.on(type, (payload) => {
-        this._emit("app-event", { type, payload: payload ? String(payload.message ?? "") : "" });
+        if (type === "update-downloaded" && isNewerVersion(payload?.version, autoUpdater.currentVersion?.toString())) {
+          this._appDownload = { track: "app", status: "update-downloaded", supported: true, applied: true, current: autoUpdater.currentVersion.toString(), latest: payload.version, message: "更新已下载并校验，请保存工作后点击重启安装" };
+        }
+        if (type === "error") this._installing = false;
+        this._emit("app-event", {
+          event: type,
+          message: payload?.message ? String(payload.message) : "",
+          version: typeof payload?.version === "string" ? payload.version : null,
+          percent: Number.isFinite(payload?.percent) ? Math.max(0, Math.min(100, payload.percent)) : null,
+        });
       });
     }
   }
 
   async _checkApp() {
+    if (this._isPortable) return { track: "app", status: "not-configured", supported: false, reason: "便携版不支持自动替换，请下载并安装 NSIS 安装版以启用自动升级" };
+    if (!this._canInstallApp) return { track: "app", status: "not-configured", supported: false, reason: "当前是开发或解包目录，请先运行 NSIS 安装包；安装版支持后续自动升级" };
+    if (this._appDownload) return this._appDownload;
+    if (this._appCheckPromise) return this._appCheckPromise;
+    this._appCheckPromise = this._checkAppOnce();
+    try { return await this._appCheckPromise; } finally { this._appCheckPromise = null; }
+  }
+
+  async _checkAppOnce() {
     const autoUpdater = await this._loadAppUpdater();
     if (!autoUpdater) {
       return {
@@ -297,16 +357,17 @@ class UpgradeManager extends EventEmitter {
         reason: "electron-updater 不可用或未配置发布源（升级接口已预留）",
       };
     }
-    // 每次 check 强制不自动下载：_applyApp 可能把 autoDownload 置 true，
-    // 若这里不重置，后续 check 会静默下载更新
+    // 每次 check 都重置，避免先前的下载流程改变 autoDownload 后造成静默下载。
     autoUpdater.autoDownload = false;
     this._wireAppUpdater(autoUpdater);
     try {
       const result = await autoUpdater.checkForUpdates();
-      const info = result && result.updateInfo;
+      if (!result?.updateInfo) return { track: "app", status: "not-configured", supported: false, reason: "开发模式不检查应用更新，请使用正式安装版" };
+      const info = result.updateInfo;
       const current = autoUpdater.currentVersion ? autoUpdater.currentVersion.toString() : null;
       const latest = info ? info.version : null;
-      const available = Boolean(latest) && latest !== current;
+      if (!semver.valid(latest) || !semver.valid(current)) throw new Error("更新源或当前应用版本号无效");
+      const available = isNewerVersion(latest, current) && !semver.prerelease(latest) && result.isUpdateAvailable !== false;
       return {
         track: "app",
         status: available ? "update-available" : "up-to-date",
@@ -319,42 +380,63 @@ class UpgradeManager extends EventEmitter {
           : "桌面端已是最新版本",
       };
     } catch (err) {
-      const reason = /not packed|app-update\.yml|dev update config/i.test(err.message)
+      const missingConfig = /not packed|app-update\.yml|dev update config/i.test(err.message);
+      const reason = missingConfig
         ? "应用未打包或未配置发布源（publish），应用自升级接口已预留，配置后即生效"
         : err.message;
-      return { track: "app", status: "not-configured", supported: false, reason };
+      return { track: "app", status: missingConfig ? "not-configured" : "error", supported: !missingConfig, reason };
     }
   }
 
   async _applyApp() {
+    if (this._appDownload) return this._appDownload;
+    const checked = await this._checkApp();
+    if (checked.status !== "update-available") return { ...checked, applied: false };
     const autoUpdater = await this._loadAppUpdater();
-    if (!autoUpdater) {
-      return {
-        track: "app",
-        status: "not-configured",
-        applied: false,
-        reason: "electron-updater 不可用或未配置发布源",
-      };
-    }
     try {
-      autoUpdater.autoDownload = true;
-      const result = await autoUpdater.checkForUpdates();
-      const current = autoUpdater.currentVersion ? autoUpdater.currentVersion.toString() : null;
-      const latest = result && result.updateInfo ? result.updateInfo.version : null;
-      if (latest && latest !== current) {
+      // 显式下载一次；若 autoDownload=true，checkForUpdates 已会自动下载，随后再调用
+      // downloadUpdate 会造成重复下载/竞态。
+      autoUpdater.autoDownload = false;
+      const { current, latest } = checked;
+      if (isNewerVersion(latest, current)) {
         await autoUpdater.downloadUpdate();
-        return {
+        this._appDownload = {
           track: "app",
           status: "update-downloaded",
           applied: true,
           current,
           latest,
-          message: "新版本已下载，重启应用后自动安装",
+          supported: true,
+          message: "新版本已下载并校验，请保存工作后点击重启安装",
         };
+        return this._appDownload;
       }
       return { track: "app", status: "up-to-date", applied: false, message: "已是最新版本" };
     } catch (err) {
       return { track: "app", status: "error", applied: false, reason: err.message };
+    }
+  }
+
+  /** 安装前先备份并停止后端；只有本地设置页的明确操作才能调用。 */
+  async installApp() {
+    if (this._isPortable || !this._canInstallApp || !this._appDownload) return { status: "error", reason: "请先使用安装版下载更新" };
+    if (this._installing || this._inFlightTracks.size) return { status: "error", reason: "还有升级操作正在进行，请稍后再试" };
+    const autoUpdater = await this._loadAppUpdater();
+    if (typeof autoUpdater?.quitAndInstall !== "function" || typeof this._prepareAppInstall !== "function") return { status: "error", reason: "安装准备接口不可用" };
+    this._installing = true;
+    try {
+      await this._prepareAppInstall();
+      // 先让 IPC 响应返回，再退出并执行已下载的 NSIS 安装器。
+      setImmediate(() => {
+        try { autoUpdater.quitAndInstall(false, true); } catch (err) {
+          this._installing = false;
+          this._emit("app-event", { event: "error", message: err.message });
+        }
+      });
+      return { status: "installing", message: "正在退出并安装更新" };
+    } catch (err) {
+      this._installing = false;
+      return { status: "error", reason: `安装准备失败：${err.message}` };
     }
   }
 
@@ -364,21 +446,37 @@ class UpgradeManager extends EventEmitter {
   _readProfileBundles() {
     const { join } = require("node:path");
     const { homedir } = require("node:os");
-    const dshHome = process.env.DSH_HOME || join(homedir(), ".dsh");
+    const dshHome = this.dshHome || process.env.DSH_HOME || join(homedir(), ".dsh");
     const pkgPath = join(dshHome, "profiles", "web", "package.json");
     try {
       const pkg = JSON.parse(require("node:fs").readFileSync(pkgPath, "utf8"));
-      const bundles = pkg["dsh.profile.bundles"] || [];
-      const deps = pkg.dependencies || {};
-      return { bundles, deps, dshHome };
-    } catch {
-      return { bundles: [], deps: {}, dshHome };
+      const rawBundles = pkg["dsh.profile.bundles"] || [];
+      if (!Array.isArray(rawBundles)) {
+        return { bundles: [], invalidBundles: [rawBundles], deps: {}, dshHome, error: "dsh.profile.bundles 必须是数组" };
+      }
+      const deps = pkg.dependencies && typeof pkg.dependencies === "object" && !Array.isArray(pkg.dependencies)
+        ? pkg.dependencies
+        : {};
+      const bundles = rawBundles.filter((value) => isSafePackageName(value));
+      const invalidBundles = rawBundles.filter((value) => !isSafePackageName(value));
+      return { bundles, invalidBundles, deps, dshHome, error: null };
+    } catch (err) {
+      return { bundles: [], invalidBundles: [], deps: {}, dshHome, error: `Profile package.json 无法读取：${err.message}` };
     }
   }
 
   /** 检查 profile bundle 是否有可用更新。 */
   async _checkProfile() {
-    const { bundles, deps, dshHome } = this._readProfileBundles();
+    const { bundles, invalidBundles, deps, error } = this._readProfileBundles();
+    if (error || invalidBundles.length > 0) {
+      return {
+        track: "profile",
+        status: "error",
+        supported: true,
+        bundles: [],
+        reason: error || `发现 ${invalidBundles.length} 个非法 bundle 声明，请先修复 package.json`,
+      };
+    }
     if (bundles.length === 0) {
       return {
         track: "profile",
@@ -390,22 +488,13 @@ class UpgradeManager extends EventEmitter {
     }
 
     const updatable = [];
-    // 并发限制为 4：bundle 多时避免串行等待（每个最多 8s 超时），
-    // 同时防止同时发起大量请求打爆 npm registry
-    const BATCH = 4;
-    const safeBundles = bundles.filter((pkg) => {
-      const installed = deps[pkg];
-      if (!installed) return false;
-      if (!isSafePackageName(pkg)) {
-        this._emit("backend-check", { current: null, latest: null, available: false, error: `忽略非法 bundle 名: ${pkg}` });
-        return false;
-      }
-      return true;
-    });
-    for (let i = 0; i < safeBundles.length; i += BATCH) {
-      const batch = safeBundles.slice(i, i + BATCH);
+    // 每批最多 4 个请求：避免逐个等待，又不会对 npm registry 发起无上限并发。
+    const BATCH_SIZE = 4;
+    for (let offset = 0; offset < bundles.length; offset += BATCH_SIZE) {
+      const batch = bundles.slice(offset, offset + BATCH_SIZE);
       const results = await Promise.all(batch.map(async (pkg) => {
         const installed = deps[pkg];
+        if (!installed || !isSafePackageName(pkg)) return null;
         try {
           const res = await fetch(
             `https://registry.npmjs.org/${pkg}/latest`,
@@ -414,15 +503,12 @@ class UpgradeManager extends EventEmitter {
           if (!res.ok) return null;
           const meta = await res.json();
           const latest = meta.version;
-          if (latest && latest !== installed) {
-            return { name: pkg, current: installed, latest };
-          }
-          return null;
+          return latest && latest !== installed ? { name: pkg, current: installed, latest } : null;
         } catch {
           return null; // 无法访问 registry 的包跳过
         }
       }));
-      for (const r of results) if (r) updatable.push(r);
+      for (const result of results) if (result) updatable.push(result);
     }
 
     return {
@@ -440,7 +526,15 @@ class UpgradeManager extends EventEmitter {
 
   /** 执行 profile bundle 更新（通过 dsh plugin update）。 */
   async _applyProfile(targetVersion) {
-    const { bundles } = this._readProfileBundles();
+    const { bundles, invalidBundles, error } = this._readProfileBundles();
+    if (error || invalidBundles.length > 0) {
+      return {
+        track: "profile",
+        status: "error",
+        applied: false,
+        reason: error || `发现 ${invalidBundles.length} 个非法 bundle 声明，已拒绝更新`,
+      };
+    }
     if (bundles.length === 0) {
       return {
         track: "profile",
@@ -457,28 +551,33 @@ class UpgradeManager extends EventEmitter {
         reason: "Profile 更新只允许已声明的 bundle，不接受任意目标包",
       };
     }
-    // 防注入：过滤非法包名（只更新合法 bundle，恶意/损坏声明直接跳过）
-    const safeBundles = bundles.filter((b) => isSafePackageName(b));
-    if (safeBundles.length === 0) {
-      return {
-        track: "profile",
-        status: "error",
-        applied: false,
-        reason: "没有可更新的合法 bundle（声明的包名均非法或为空）",
-      };
-    }
-    if (safeBundles.length !== bundles.length) {
-      this._emit("profile-update", { success: false, output: `已忽略 ${bundles.length - safeBundles.length} 个非法 bundle 名` });
-    }
     try {
-      const r = runDshCli(this.server, ["plugin", "--profile", "web", "update", ...safeBundles], { timeout: 120_000 });
+      const r = this._runDshCli(this.server, ["plugin", "--profile", "web", "update", ...bundles], { timeout: 120_000 });
       const success = r.status === 0;
       this._emit("profile-update", { success, output: r.stdout + r.stderr });
+      if (!success) {
+        return {
+          track: "profile",
+          status: "error",
+          applied: false,
+          message: `更新失败: ${(r.stderr || r.stdout || `exit=${r.status}`).slice(-200)}`,
+        };
+      }
+      const restarted = await this.server.restart();
+      if (!restarted || restarted.state !== "running") {
+        return {
+          track: "profile",
+          status: "error",
+          applied: true,
+          reason: `Profile bundle 已更新，但后端重启失败：${restarted?.error || restarted?.state || "unknown"}`,
+        };
+      }
       return {
         track: "profile",
-        status: success ? "up-to-date" : "error",
-        applied: success,
-        message: success ? "Profile bundle 已更新（需重启 dsh 后端）" : `更新失败: ${(r.stderr || r.stdout).slice(-200)}`,
+        status: "up-to-date",
+        applied: true,
+        restarted: true,
+        message: "Profile bundle 已更新，DSH 后端已重启",
       };
     } catch (err) {
       return { track: "profile", status: "error", applied: false, reason: err.message };
@@ -486,4 +585,4 @@ class UpgradeManager extends EventEmitter {
   }
 }
 
-module.exports = { UpgradeManager, BACKEND_UPGRADER, BACKEND_PACKAGE, isSafeVersion, isSafePackageName, runDshCli };
+module.exports = { UpgradeManager, BACKEND_UPGRADER, BACKEND_PACKAGE, isSafeVersion, isSafePackageName, isNewerVersion, runDshCli };

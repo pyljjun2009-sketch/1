@@ -57,6 +57,7 @@ test("set: 非法 dshCommand / nodeBin / host / 布尔 拒绝", () => {
   assert.throws(() => s.set({ dshCommand: "node bin.js" }), /dshCommand/);
   assert.throws(() => s.set({ dshCommand: ["node", 42] }), /dshCommand/);
   assert.throws(() => s.set({ dshCommand: [] }), /dshCommand/);
+  assert.throws(() => s.set({ dshCommand: ["node", "   "] }), /dshCommand/);
   assert.throws(() => s.set({ nodeBin: "" }), /nodeBin/);
   assert.throws(() => s.set({ host: 123 }), /host/);
   assert.throws(() => s.set({ host: "" }), /host/);
@@ -73,6 +74,29 @@ test("set: 非法 dshCommand / nodeBin / host / 布尔 拒绝", () => {
   s.set({ dshCommand: null, nodeBin: null, workingDirectory: null, launchAtLogin: true });
   assert.equal(s.get("launchAtLogin"), true);
   rmSync(dir, { recursive: true, force: true });
+});
+
+test("set: 混合补丁校验失败时保持原子性", () => {
+  const dir = makeDir();
+  const s = new Settings().init(fakeApp(dir));
+  assert.throws(() => s.set({ port: 1234, host: "bad host" }), /host/);
+  assert.equal(s.get("port"), DEFAULTS.port, "合法字段不应在同一补丁失败后残留到内存");
+  const onDisk = JSON.parse(readFileSync(join(dir, "settings.json"), "utf8"));
+  assert.equal(onDisk.port, DEFAULTS.port, "失败补丁不应写入磁盘");
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("init: 重复初始化时缺失字段回退默认值而非沿用旧值", () => {
+  const firstDir = makeDir();
+  const secondDir = makeDir();
+  const s = new Settings().init(fakeApp(firstDir));
+  s.set({ port: 4567, host: "localhost" });
+  writeFileSync(join(secondDir, "settings.json"), JSON.stringify({ host: "127.0.0.1" }));
+  s.init(fakeApp(secondDir));
+  assert.equal(s.get("port"), DEFAULTS.port);
+  assert.equal(s.get("host"), "127.0.0.1");
+  rmSync(firstDir, { recursive: true, force: true });
+  rmSync(secondDir, { recursive: true, force: true });
 });
 
 test("set/init: gpuMode 与 keepBackendRunning 校验", () => {

@@ -19,6 +19,7 @@ const CH = {
   RELOAD_WINDOW: "window:reload",
   UPGRADE_CHECK: "upgrade:check",
   UPGRADE_APPLY: "upgrade:apply",
+  UPGRADE_INSTALL: "upgrade:install-app",
   BACKUP_CREATE: "backup:create",
   BACKUP_LIST: "backup:list",
   BACKUP_RESTORE: "backup:restore",
@@ -53,6 +54,7 @@ contextBridge.exposeInMainWorld("dshDesktop", {
   upgrade: {
     check: (track) => ipcRenderer.invoke(CH.UPGRADE_CHECK, track),
     apply: (track, targetVersion) => ipcRenderer.invoke(CH.UPGRADE_APPLY, track, targetVersion),
+    installApp: () => ipcRenderer.invoke(CH.UPGRADE_INSTALL),
     onEvent: (cb) => subscribe(CH.UPGRADE_EVENT, cb),
   },
   backup: {

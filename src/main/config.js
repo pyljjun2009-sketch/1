@@ -52,7 +52,7 @@ const HOST_RE = /^[a-zA-Z0-9.\-:\[\]]+$/;
 /** 单字段校验器：返回 true 表示合法。 */
 const VALIDATORS = {
   dshCommand: (v) =>
-    v === null || (Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === "string")),
+    v === null || (Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === "string" && x.trim().length > 0)),
   nodeBin: (v) => v === null || (typeof v === "string" && v.trim().length > 0),
   host: (v) => typeof v === "string" && v.trim().length > 0 && HOST_RE.test(v.trim()),
   port: (v) => Number.isInteger(v) && v >= 0 && v <= 65535,
@@ -106,6 +106,9 @@ class Settings {
     this.userDataDir = app.getPath("userData");
     mkdirSync(this.userDataDir, { recursive: true });
     this.file = join(this.userDataDir, "settings.json");
+    // Settings 实例可能在测试、恢复或未来的配置重载流程中重复初始化。
+    // 每次都从默认值重新开始，避免缺失字段继承上一次加载的陈旧值。
+    this.data = { ...DEFAULTS };
     this.warnings = [];
     try {
       const raw = JSON.parse(readFileSync(this.file, "utf8"));
@@ -143,13 +146,16 @@ class Settings {
     if (!patch || typeof patch !== "object") {
       throw new Error("配置补丁必须是对象");
     }
+    // 先完整校验，再一次性应用，保证混合补丁不会出现“前半段已改、后半段报错”的状态。
+    const accepted = {};
     for (const key of Object.keys(patch)) {
       if (!(key in DEFAULTS)) continue; // 未知字段忽略，保证向前兼容
       if (!validateField(key, patch[key])) {
         throw new Error(`配置字段非法: ${key}（应为 ${FIELD_LABELS[key] ?? "合法值"}）`);
       }
-      this.data[key] = patch[key];
+      accepted[key] = patch[key];
     }
+    Object.assign(this.data, accepted);
     const saved = this.save();
     if (!saved) {
       console.warn("[dsh-desktop] 配置已应用到内存，但磁盘写入失败（重启后可能丢失）");

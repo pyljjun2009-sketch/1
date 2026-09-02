@@ -86,7 +86,7 @@
 ### 2.3 目录结构
 
 ```
-D:\AI\DSHarness/
+D:\AI\DSH/
 ├─ src/
 │  ├─ main/
 │  │  ├─ index.js            # 入口（GPU/单实例/生命周期）
@@ -370,7 +370,7 @@ upgrade:event                       on       进度推送（checking/downloading
 
 ## 五、与官方桌面端的差异矩阵
 
-| 特性 | 官方 (sdkwork-ai) | 本项目 (dsh-desktop, D:\AI\DSHarness) | 计划新增 |
+| 特性 | 官方 (sdkwork-ai) | 本项目 (dsh-desktop, D:\AI\DSH) | 计划新增 |
 |---|---|---|---|
 | Electron 封装 | ✅ | ✅ | — |
 | GPU 降级 | ❓ | ✅ inprocess 默认 | — |

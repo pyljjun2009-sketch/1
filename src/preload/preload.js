@@ -5,6 +5,16 @@
  */
 const { contextBridge, ipcRenderer } = require("electron");
 
+const CH = {
+  STATUS: "dsh:get-status",
+  RESTART: "dsh:restart",
+  OPEN_EXTERNAL: "app:open-external",
+  VERSIONS: "app:get-versions",
+  RELOAD_WINDOW: "window:reload",
+  STATUS_EVENT: "dsh:status-event",
+  ERROR_EVENT: "dsh:error-event",
+};
+
 function subscribe(channel, cb) {
   const listener = (_event, payload) => cb(payload);
   ipcRenderer.on(channel, listener);
@@ -12,11 +22,11 @@ function subscribe(channel, cb) {
 }
 
 contextBridge.exposeInMainWorld("dshDesktop", {
-  getStatus: () => ipcRenderer.invoke("dsh:get-status"),
-  restart: () => ipcRenderer.invoke("dsh:restart"),
-  getVersions: () => ipcRenderer.invoke("app:get-versions"),
-  openExternal: (url) => ipcRenderer.invoke("app:open-external", url),
-  reload: () => ipcRenderer.invoke("window:reload"),
-  onStatus: (cb) => subscribe("dsh:status-event", cb),
-  onError: (cb) => subscribe("dsh:error-event", cb),
+  getStatus: () => ipcRenderer.invoke(CH.STATUS),
+  restart: () => ipcRenderer.invoke(CH.RESTART),
+  getVersions: () => ipcRenderer.invoke(CH.VERSIONS),
+  openExternal: (url) => ipcRenderer.invoke(CH.OPEN_EXTERNAL, url),
+  reload: () => ipcRenderer.invoke(CH.RELOAD_WINDOW),
+  onStatus: (cb) => subscribe(CH.STATUS_EVENT, cb),
+  onError: (cb) => subscribe(CH.ERROR_EVENT, cb),
 });

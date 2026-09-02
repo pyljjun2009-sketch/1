@@ -6,7 +6,8 @@ const assert = require("node:assert/strict");
 const { mkdtempSync, rmSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
-const { registerIpc, isSafeExternalUrl } = require("../src/main/ipc.js");
+const { pathToFileURL } = require("node:url");
+const { registerIpc, isSafeExternalUrl, assertSettingsPage } = require("../src/main/ipc.js");
 const { settings, Settings } = require("../src/main/config.js");
 const CH = require("../src/shared/channels.js");
 
@@ -34,6 +35,7 @@ function makeFakeWindow() {
     isDestroyed: () => false,
     loadURL: () => {},
     webContents: {
+      isDestroyed: () => false,
       send(channel, payload) {
         sends.push({ channel, payload });
       },
@@ -47,15 +49,28 @@ let ipc;
 let win;
 let calls;
 let fakeBackup;
+let extraWindows;
 
 beforeEach(() => {
   ipc = makeFakeIpc();
   win = makeFakeWindow();
-  calls = { restarts: 0 };
+  extraWindows = [];
+  calls = { restarts: 0, stops: 0, starts: 0, restores: 0 };
   const fakeServer = {
+    state: "running",
     status: () => ({ state: "running", url: "http://127.0.0.1:9/" }),
     restart: async () => {
       calls.restarts += 1;
+      return { state: "running", url: "http://127.0.0.1:9/" };
+    },
+    stop: async function () {
+      calls.stops += 1;
+      this.state = "stopped";
+      return { state: "stopped" };
+    },
+    start: async function () {
+      calls.starts += 1;
+      this.state = "running";
       return { state: "running", url: "http://127.0.0.1:9/" };
     },
     version: "0.1.0",
@@ -63,6 +78,7 @@ beforeEach(() => {
     removeListener: () => {},
   };
   const fakeUpgrade = {
+    installApp: async () => ({ status: "installing" }),
     check: async (track) => ({ track, status: "up-to-date" }),
     apply: async (track) => ({ track, applied: false }),
     setEventSink: (fn) => {
@@ -74,7 +90,7 @@ beforeEach(() => {
   fakeBackup = {
     create: (note) => ({ id: "backup-id", note }),
     list: () => [],
-    restore: (id) => ({ restored: id }),
+    restore: (id) => { calls.restores += 1; return { restored: id, beforeBackupId: "before-id" }; },
     diff: (id) => ({ id, identical: true, diffs: {} }),
     delete: (id) => ({ deleted: id }),
   };
@@ -88,18 +104,39 @@ beforeEach(() => {
   registerIpc({
     server: fakeServer,
     getWindow: () => win,
+    getUpgradeWindows: () => extraWindows,
     upgradeManager: fakeUpgrade,
     backupManager: fakeBackup,
     crashRecovery: fakeCrash,
     ipc,
     appApi: { getVersion: () => "0.1.0", setLoginItemSettings: () => {} },
     shellApi: fakeShell,
+    runDshCliApi: () => ({ status: 0, stdout: "", stderr: "" }),
   });
 });
 
 test("STATUS 返回后端状态", async () => {
   const r = await ipc.invoke(CH.STATUS);
   assert.equal(r.state, "running");
+});
+
+test("UPGRADE_INSTALL: 本地设置页可安装，远程页和缺失来源被拒绝", async () => {
+  assert.equal((await ipc.invoke(CH.UPGRADE_INSTALL)).status, "installing");
+  const handler = ipc.handlers.get(CH.UPGRADE_INSTALL);
+  assert.throws(() => handler({}), /只能从本地设置页/);
+  assert.throws(() => handler({ senderFrame: { url: "http://127.0.0.1:3080/" } }), /只能从本地设置页/);
+});
+
+test("升级进度转发到本地设置窗口，而不发送到其他页面", () => {
+  const local = makeFakeWindow();
+  local.webContents.getURL = () => pathToFileURL(join(__dirname, "..", "assets", "settings.html")).href;
+  const remote = makeFakeWindow();
+  remote.webContents.getURL = () => "https://example.org/";
+  extraWindows.push(local, remote);
+  calls.sink({ type: "app-event", event: "download-progress", percent: 42 });
+  assert.equal(local.sends.length, 1);
+  assert.equal(local.sends[0].payload.percent, 42);
+  assert.equal(remote.sends.length, 0);
 });
 
 test("RESTART 调用 server.restart", async () => {
@@ -160,6 +197,20 @@ test("管理 IPC 只允许本地设置页调用", async () => {
     () => handler({ senderFrame: { url: "http://127.0.0.1:3080/" } }, { port: 8080 }),
     /本地设置页/
   );
+  assert.throws(() => handler({}, { port: 8080 }), /本地设置页/);
+  assert.throws(() => handler(null, { port: 8080 }), /本地设置页/);
+  // 使用标准 file URL（安装路径含空格/中文时会自动百分号编码）应通过。
+  const settingsPath = join(__dirname, "..", "assets", "settings.html");
+  assert.doesNotThrow(() => assertSettingsPage({ senderFrame: { url: pathToFileURL(settingsPath).href } }));
+});
+
+test("BACKUP_RESTORE: 运行中的后端先停止，恢复并同步依赖后再启动", async () => {
+  const result = await ipc.invoke(CH.BACKUP_RESTORE, "backup-id");
+  assert.equal(calls.stops, 1);
+  assert.equal(calls.restores, 1);
+  assert.equal(calls.starts, 1);
+  assert.equal(result.resynced, true);
+  assert.equal(result.restarted, true);
 });
 
 test("管理 IPC 校验备份备注长度", async () => {

@@ -2,11 +2,12 @@
 # 用法：先正常关闭旧的 "DeepSeek Harness Desktop" 窗口，再运行本脚本：
 #   右键 -> 使用 PowerShell 运行；或  powershell -ExecutionPolicy Bypass -File 本脚本
 #
-# 说明：构建体系为 %LOCALAPPDATA%\dsh-desktop-build-a / -b 双目录交替，
+# 说明：构建体系为 <项目根目录>\artifacts\dsh-desktop-build-a / -b 双目录交替，
 #       current.txt 记录当前最新构建目录（由 scripts/build.js 维护）。
 
 $ErrorActionPreference = 'Continue'
-$base = Join-Path $env:LOCALAPPDATA 'dsh-desktop-build'
+$projectRoot = Split-Path $PSScriptRoot -Parent
+$base = Join-Path $projectRoot 'artifacts\dsh-desktop-build'
 $currentFile = Join-Path $base 'current.txt'
 $lnkName = 'DeepSeek Harness Desktop.lnk'
 $ws = New-Object -ComObject WScript.Shell
