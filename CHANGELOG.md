@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+### 修复
+
+- **依赖安全漏洞**：修复 3 个 high 级漏洞（`@xmldom/xmldom` 0.8.14 → 已修复版本、`fast-uri` 3.x → 已修复版本、`js-yaml` 4.x → 已修复版本，均在 electron-builder 构建工具链）——`npm audit` 归零，`npm run verify` 依赖安全审计通过
+- **本机全局 DSH 修复**：清理被中断安装留下的残破目录（`%APPDATA%\npm\node_modules\@deepseek-ai\dsh` 仅剩 node_modules）并重装官方 latest（0.1.1-rc.2），`package.json`/`lib/bin.js`/yaml 运行库完整性恢复
+
 ## [0.1.2] - 2026-09-02
 
 - NSIS 安装版绑定现有公开 GitHub Releases 更新源；新增下载进度和“保存工作并重启安装”入口
@@ -15,7 +20,9 @@
 - 本机全局 DSH 可执行文件缺失，原真实全局冒烟未通过；未擅自修改全局 DSH
 - 项目内隔离官方 DSH 0.1.1-rc.2 的打包态真实冒烟通过；一键 `npm run verify` 全部通过
 
-本版本仅生成本地安装包，尚未提交或公开发布；完整说明见 `docs/RELEASE-0.1.2.md`。
+已发布：GitHub Release `v0.1.2`（NSIS 安装包 + 便携版 + blockmap + latest.yml），
+更新源经 Electron 真实网络栈校验（`UPDATE_SOURCE_CHECK` = `up-to-date`）。
+完整说明见 `docs/RELEASE-0.1.2.md`。
 
 ## [0.1.1] - 2026-09-01
 
