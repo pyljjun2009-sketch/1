@@ -1,7 +1,13 @@
 # DSH 0.1.5-rc.1 升级评估（决定：暂不升级）
 
-> 评估日期：2026-09-11 ｜ 结论：**暂不升级**，保持 dsh `0.1.1-rc.2` + 桌面端 `0.1.2`
+> 评估日期：2026-09-11（插件兼容性审计复核：2026-09-11）｜ 结论：**暂不升级**，保持 dsh `0.1.1-rc.2` + 桌面端 `0.1.2`
 > 本文档记录调研证据与升级前置条件，供将来决策复用。
+>
+> **审计要点**：9 个第三方插件中仅 3 个明确支持 0.1.5-rc.1；`dshmarket`（插件市场）09-13 最新版仍不兼容；
+> `@openviking/dsh-memory-plugin`（记忆能力）存疑且社区已报告故障 ⇒ 当前不具备安全升级条件。
+>
+> **附注**：DSH 目前不存在严格意义的"稳定版"——npm `latest` 指向的 `0.1.5-rc.1` 本身是 `prerelease`，
+> 整个 0.1.x 系列均为 rc/alpha 通道；本机所用 `0.1.1-rc.2` 同为 rc 版本但为官方 `latest` 长期指向的稳定落点。
 
 ## 1. 版本现状
 
@@ -33,18 +39,20 @@
 - 迁移按需触发（仅被打开/恢复的会话），随使用逐步扩大影响面
 
 ### R2 11 个 profile 插件需连锁升级
-| 插件（本机版本） | npm 最新 | 备注 |
+| 插件（本机版本） | npm 最新（发布时间） | 0.1.5-rc.1 兼容判定 |
 |---|---|---|
-| `@nanmicoder/dsh-agent-teams` 0.1.14（固定） | 0.1.17-rc.1 | peerDependencies 明确列出 `0.1.5-rc.1` ✅ |
-| `@openviking/dsh-memory-plugin` ^0.3.0 | 0.3.0（已最新） | peer 范围 `>=0.1.0-rc.6 <0.2.0`，但社区报告记忆插件故障 ⚠ |
-| `dsh-pocket` ^1.8.3 | 2.10.6 | 跨大版本 |
-| `dshmarket` ^1.40.0 | 1.45.1 | 待确认 |
-| `@anionex/dsh-vision-toolkit` ^0.1.40 | 0.1.44 | 待确认 |
-| `dsh-tongflow` ^0.6.0 | 0.8.0 | 待确认 |
-| `@vectorize-io/hindsight-coding-agents` ^0.5.1 | 0.5.3 | 待确认 |
-| `aegis` | GitHub commit 固定 | 需确认分支适配 |
-| `dsh-sub2api-personal` | 本地 `link:` | 需自行适配 |
-| `@deepseek-ai/dsh-base` / `dsh-web-app` | 官方 | 随宿主同步 |
+| `@anionex/dsh-vision-toolkit` ^0.1.40 | 0.1.44（09-10） | ✅ **明确支持**：peer 含 `^0.1.5-rc.1` |
+| `dsh-tongflow` ^0.6.0 | 0.8.2（09-12） | ✅ **支持**：peer 含 `^0.1.5-alpha.0`（prerelease 段同为 0.1.5） |
+| `@nanmicoder/dsh-agent-teams` 0.1.14（固定） | 0.1.17-rc.1（09-11） | ✅ **明确支持**：peer 列出 `0.1.5-rc.1` |
+| **`dshmarket`** ^1.40.0 | **1.46.1（09-13，最新）** | ❌ **不兼容**：peer 仅 `^0.1.0-rc.7 \|\| ^0.1.1-rc.2 \|\| ^0.1.2-alpha.2`（无 0.1.5 段） |
+| **`@openviking/dsh-memory-plugin`** ^0.3.0 | 0.3.0（08-28，未更新） | ⚠️ **存疑**：peer `>=0.1.0-rc.6 <0.2.0` 的 prerelease 段为 0.1.0，按 semver 规则不匹配 0.1.5-rc.1；且社区报告"接口变更引发记忆插件故障" |
+| `dsh-pocket` ^1.8.3 | 2.10.6（09-10） | ❓ 未声明 dsh peer（仅 cordis），需实测 |
+| `@vectorize-io/hindsight-coding-agents` ^0.5.1 | 0.6.0（09-11） | ❓ 未声明 dsh peer，需实测 |
+| `aegis` | GitHub commit 固定 | ❓ 未知，需查上游分支 |
+| `dsh-sub2api-personal` | 本地 `link:` | ❓ 仅声明 `@deepseek-ai/cordis ^4.0.1`，需自行适配 |
+| `@deepseek-ai/dsh-base` / `dsh-web-app` | 官方 | 随宿主同步升级 |
+
+**审计结论（2026-09-11）**：9 个第三方插件中仅 **3 个明确支持** 0.1.5-rc.1，**1 个明确不兼容**（`dshmarket` —— 插件市场，管理插件的核心工具，09-13 最新版仍未适配），**1 个存疑**（`@openviking/dsh-memory-plugin` —— 记忆能力，社区已报告故障），其余 4 个未声明需实测。⇒ **当前不具备安全升级条件**。
 
 ### R3 接口破坏性变更
 - Session 生命周期：持久化 API 改为生命周期持有的 `SessionHandle`；`agentLoop.create()` 改为异步；新增 session 锁
